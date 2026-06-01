@@ -1,0 +1,66 @@
+# Canonical library-ci.yml for the loft-libs-game chunk.
+# Adapted from loft-libs-assets's workflow; matrix populated with
+# the chunk's actual packages.
+
+name: library-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [time]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mold (loft's pinned linker)
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Clone loft source
+        uses: actions/checkout@v4
+        with:
+          repository: jjstwerff/loft
+          path: loft-src
+
+      - name: Cache cargo registry + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            loft-src/target
+          key: loft-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: |
+            loft-
+
+      - name: Build loft from source
+        working-directory: loft-src
+        run: |
+          # `--lib --bin loft` is load-bearing — see loft-libs-graphics
+          # library-ci.yml for the full rationale (libloft.rlib placement
+          # for --native).
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> $GITHUB_PATH
+
+      - name: Interpreter — loft test
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --interpret --tests tests
+
+      # No native test step — these packages are pure-loft (no cdylib).
+      # If a future asset format needs native code (e.g. an audio codec
+      # binding), add the `loft --native --tests tests` step from the
+      # canonical library-ci.yml.example.
+
+      # Phase 6t Tier 4 — transitive dep tests.  For glb, this exercises
+      # glb against the resolved mesh3d dep — catches mesh3d/glb API drift.
+      - name: Transitive dep tests
+        working-directory: ${{ matrix.package }}
+        run: loft test --deps
