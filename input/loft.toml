@@ -1,0 +1,11 @@
+[package]
+name    = "input"
+version = "0.1.0"
+loft    = ">=0.8"
+repository = "loft-libs-game"
+
+[library]
+entry = "src/input.loft"
+
+[dependencies]
+graphics = ">=0.1"
