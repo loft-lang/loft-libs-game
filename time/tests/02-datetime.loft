@@ -102,3 +102,44 @@ fn test_now_and_vector() {
     first = first + time::days(10);
     assert(events[0].day() == 1, "value-struct copy: source element unchanged");
 }
+
+fn test_iso_and_millis() {
+    d = time::datetime(2026, 5, 25, 8, 0, 0);   // Monday
+    // the value-struct methods delegate to the integer API — cross-check on the
+    // same instant (01-basics pins the integer fns to hand-goldens)
+    assert(d.iso_year() == time::iso_year(d as integer), "iso_year delegates");
+    assert(d.iso_week() == time::iso_week(d as integer), "iso_week delegates");
+    assert(d.iso_week() >= 1 && d.iso_week() <= 53, "iso_week range {d.iso_week()}");
+    assert(d.to_millis() == (d as integer), "to_millis == as integer");
+}
+
+fn test_duration_full() {
+    assert((time::hours(2) - time::minutes(30)) == time::minutes(90), "duration subtract");
+    assert(time::hours(1) <= time::hours(1), "dur <=");
+    assert(time::hours(2) >= time::hours(1), "dur >=");
+    assert(time::hours(2) > time::hours(1), "dur >");
+    assert(time::hours(1) != time::hours(2), "dur !=");
+    assert(time::minutes(90).total_millis() == 5400000, "total_millis");
+}
+
+fn test_format_aliases() {
+    mon = time::date(2026, 5, 25);   // Monday
+    assert("{mon:wday}" == "Mon", "wday spec {mon:wday}");
+    assert("{mon:weekday}" == "Mon", "weekday alias {mon:weekday}");
+    d = time::datetime(2026, 7, 8, 13, 30, 7);
+    assert("{d:secs}" == "13:30:07", "secs alias {d:secs}");
+}
+
+fn test_edge_cases() {
+    // pre-1970 (negative epoch ms) still fields + formats correctly
+    old = time::datetime(1960, 6, 15, 12, 0, 0);
+    assert(old.year() == 1960, "pre-1970 year {old.year()}");
+    assert(old.month() == 6, "pre-1970 month");
+    assert(old.day() == 15, "pre-1970 day");
+    assert((old as integer) < 0, "pre-1970 is negative ms");
+    assert("{old:date}" == "1960-06-15", "pre-1970 date fmt {old:date}");
+    // garbage text -> DateTime is a TOTAL best-effort cast (epoch 0); the fallible
+    // integer parse is the checked path
+    assert(("garbage" as DateTime).to_millis() == 0, "total cast of garbage -> epoch");
+    assert(!time::parse("garbage"), "checked parse returns null on garbage");
+}
