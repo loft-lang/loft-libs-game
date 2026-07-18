@@ -115,7 +115,7 @@ fn digits_at(ds: text, start: integer, count: integer) -> integer {
 // or "THH:MM[:SS]" with an optional trailing "Z".  Returns null on any
 // malformed input (test with `!result`).
 pub fn parse(ps: text) -> integer? {
-    n = len(ps);
+    n = size(ps);
     if n < 10 { return null; }
     py  = digits_at(ps, 0, 4);
     pmo = digits_at(ps, 5, 2);
@@ -196,7 +196,7 @@ pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer {
 // Combine a date with an "HH:MM" or "HH:MM:SS" time string.  Mirrors
 // `datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.
 pub fn combine(cmd: integer, time_text: text) -> integer? {
-    cn = len(time_text);
+    cn = size(time_text);
     if cn < 5 { return null; }
     chh = digits_at(time_text, 0, 2);
     cmm = digits_at(time_text, 3, 2);
