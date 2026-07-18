@@ -429,7 +429,7 @@ pub fn to_text(self: DateTime, spec: text) -> text {
     r
 }
 // A Duration renders as [-]H:MM:SS (hours may exceed 24).
-pub fn to_text(self: Duration, spec: text) -> text {
+pub fn to_text(self: Duration, _spec: text) -> text {
     neg = self.ms < 0;
     tot = if neg { 0 - self.ms } else { self.ms };
     ss = (tot / MS_PER_SECOND) % 60;
