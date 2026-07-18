@@ -61,25 +61,25 @@ pub const MB_MIDDLE = 4;
 // keys triggers the action).  An empty `ab_keys` is degenerate but
 // valid — the action will simply never fire.
 pub struct ActionBinding {
-  ab_name: text not null,
-  ab_keys: vector<integer>
+  const ab_name: text not null,
+  const ab_keys: vector<integer>
 }
 
 // One named axis: pair of (negative key, positive key) → -1.0 / 0.0
 // / +1.0.  If both are down simultaneously the axis reads 0.0 (they
 // cancel) — same convention as Unity / Godot's built-in axis pairs.
 pub struct AxisBinding {
-  ax_name: text not null,
-  ax_neg: integer not null,
-  ax_pos: integer not null
+  const ax_name: text not null,
+  const ax_neg: integer not null,
+  const ax_pos: integer not null
 }
 
 // Full binding set — game code constructs this once and passes it
 // into `input_new`.  Re-binding at runtime: mutate this struct in
 // place (or build a new one) and call `input_set_bindings`.
 pub struct Bindings {
-  bnd_actions: vector<ActionBinding>,
-  bnd_axes: vector<AxisBinding>
+  const bnd_actions: vector<ActionBinding>,
+  const bnd_axes: vector<AxisBinding>
 }
 
 // Abstract input state.  Fields are documented but considered
@@ -92,8 +92,8 @@ pub struct Bindings {
 // (`MB_LEFT | MB_RIGHT | …`).
 pub struct InputState {
   is_bindings: Bindings not null,
-  is_keys_now: vector<boolean> not null,
-  is_keys_prev: vector<boolean> not null,
+  const is_keys_now: vector<boolean> not null,
+  const is_keys_prev: vector<boolean> not null,
   is_mouse_x: float not null,
   is_mouse_y: float not null,
   is_mouse_buttons_now: integer not null,
