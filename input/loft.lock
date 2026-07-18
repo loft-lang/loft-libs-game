@@ -4,7 +4,7 @@ schema_version = 1
 
 [[package]]
 name = "graphics"
-version = "0.2.0"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.2.0/graphics-0.2.0.tar.gz"
-sha256 = "284cf0438e72fdba49591f6bfb48a7f5b48c0fea5522ccb3617368c38f4997fb"
+version = "0.4.2"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.2/graphics-0.4.2.tar.gz"
+sha256 = "330edd389c46389b04fb4bae9a537ee121fa6cb5fb3e0e9f9f4b1ec0b75777be"
 source = "registry"
