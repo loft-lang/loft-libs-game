@@ -1,7 +1,7 @@
 [package]
 name    = "time"
-version = "0.2.1"
-loft    = ">=0.8"
+version = "0.3.0"
+loft    = ">=2026.7.2"
 
 [library]
 entry = "src/time.loft"
