@@ -17,8 +17,9 @@ Per the chunked-repo design in
 
 ## Why this chunk exists
 
-These libraries form the **runtime game services** layer: per-frame
-state (time), per-frame inputs (`input`), procedural visual effects
+These libraries form the **runtime game services** layer: the fixed
+simulation step (`fixstep`), calendar arithmetic (`time`), per-frame
+inputs (`input`), procedural visual effects
 (`particles`), and dynamics (`physics_2body`).  They sit between the
 hex-world data model ([loft-libs-world](https://github.com/loft-lang/loft-libs-world))
 and the rendering / windowing stack ([loft-libs-graphics](https://github.com/loft-lang/loft-libs-graphics))
@@ -34,7 +35,8 @@ games don't have to chase mutually-compatible point versions across
 
 | Subdir | Package | Status |
 |---|---|---|
-| `time/` | time | ✅ 0.1.0 — frame counter, dt, scheduling |
+| `time/` | time | ✅ 0.2.0 — date/time arithmetic, `DateTime` / `Duration` |
+| `fixstep/` | fixstep | ✅ 0.1.0 — the fixed simulation step: clock, bank, one-shot timer, ease |
 | `input/` | input | (planned — wraps `graphics::poll_events` into action state + bindings) |
 | `particles/` | particles | (planned, lib_plans/future/27) |
 | `physics_2body/` | physics_2body | (planned, lib_plans/future/26) |

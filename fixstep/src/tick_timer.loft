@@ -1,0 +1,269 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A one-shot duration that fires once, in exact integer time —
+// plan 26 phase L3.
+//
+// ── ⚠⚠ THE DIRECTION PROBLEM, AND WHY THIS FILE DELETES IT ───────
+//
+// `CLAUDE.md` § Timers and epsilons carries the rule this file
+// answers, and it is a MEASURED one rather than a caution:
+//
+// > **A banked timer's DIRECTION is half the epsilon rule — counting
+// > UP and counting DOWN do not accumulate the same way, and NEITHER
+// > IS SAFE.**
+//
+// `tower.loft::TOWER_REPAIR_EPSILON` carried the table.  Over a
+// `1 / 1.5` s tick, for durations that ARE exact multiples of it:
+//
+//   | T      | ticks | counting UP        | counting DOWN |
+//   |---|---|---|---|
+//   |  4.0 s |    6  | 3.9999999999999996 | residue > 0   |
+//   | 20.0 s |   30  | **exactly 20.0**   | residue > 0   |
+//   | 30.0 s |   45  | 30.000000000000018 | residue < 0   |
+//   | 60.0 s |   90  | 59.99999999999992  | residue > 0   |
+//
+// Four sites in dryopea re-stated that arithmetic, three of them with
+// their own 1e-9 nudge, and each nudge had to be argued separately
+// because *which way it had to lean depended on the direction of the
+// count*.  20.0 s counting up needed none at all and was exact by luck;
+// 60.0 s counting down needed one or the helper came back on the
+// ninety-FIRST tick.
+//
+// ⚠⚠ **In integer time the question does not arise, and that is the
+// finding rather than the fix.**  A `Timer` holds ONE number — base
+// units spent since it was armed — and both readings come off it:
+// `timer_spent` is the up-count, `timer_left` is `total - spent`.  Two
+// directions, one arithmetic, so there is nothing left to get
+// backwards.  ⚠ It is not that both directions were made exact; it is
+// that there are no longer two directions.
+//
+// `tests/26_l3_the_timers.loft` is the gate, and it keeps BOTH float
+// paths beside the integer one as the control — the same construction
+// `tests/26_l1` needed, for the same reason: *integers agreeing with
+// integers is not a measurement*.
+//
+// ── ⚠⚠ IT IS NOT A `Bank`, AND THE REFUTATION IS MEASURED ────────
+//
+// `plans/26` § The invariant claims a family boundary:
+//
+// > A one-shot's remainder DIES at its boundary; a bank's is
+// > load-bearing FOR EVER.
+//
+// A claim that clean is the one to attack, so L3 attacked it: build a
+// one-shot out of `bank_gain` at a rate of `1 / T` units per second and
+// see what breaks.  Two things do, and both are silent:
+//
+//   1. **It fires again.**  A bank has no boundary — spend another T
+//      seconds and it releases a second unit.  Every one-shot in
+//      dryopea is armed by an EVENT (a crew member delivered, a boost
+//      pressed, a wave cleared), so a second firing is a helper that
+//      rejoins twice.
+//   2. **The residue leaks into the NEXT arming.**  The boost cooldown
+//      is 5.0 s, which is 7.5 ticks: the first one takes 8 ticks and a
+//      bank-backed one would take **7** for the second boost, because
+//      half a tick of the first cooldown is still banked.  That is the
+//      bank being RIGHT about its own job — a scout that banked
+//      two-thirds of a hex is two-thirds of a hex closer, permanently —
+//      and wrong about this one.
+//
+// ⚠ So the two types stay apart, and `tests/26_l3` § A one-shot built
+// on a bank is the assertion, not this comment.  ⚠⚠ One clever type
+// that "handles both" is the over-unification plan 26 was written to
+// avoid.
+//
+// ── ⚠ WHAT IT HOLDS, AND WHY `total` IS A FIELD HERE ─────────────
+//
+// `tick_bank.loft` refuses to hold its `whole` and takes it per call,
+// because loft defaults an omitted struct field silently
+// ([loft#914](https://github.com/loft-lang/loft/issues/914)) and a
+// defaulted `whole` of 0 is a mover that never moves — a partial
+// `Enemy { }` literal would freeze it.
+//
+// ⚠ **A `Timer` holds its `total`, and the same rule is what says it
+// may**: a defaulted `total` of 0 is an UNARMED timer, which is exactly
+// what every zero-valued field it replaces already meant — `recover:
+// 0.0` is "not recovering", `boost_left: 0.0` is "not boosting",
+// `stand: 0.0` is "not standing", `lull: 0.0` is "send now".  So
+// `Timer { }` is correct-neutral at every site, where `Bank { whole: 0 }`
+// would have been correct-neutral at none.
+//
+// ⚠ It is also what lets one timer answer BOTH directions without the
+// caller passing the duration back in every time, and what makes
+// "armed" a state rather than a second boolean beside it.
+//
+// ── ⚠ WHAT IS DELIBERATELY NOT HERE ─────────────────────────────
+//
+// **No repeat, no auto-rearm.**  A timer that re-armed itself would be
+// a `Bank` with a boundary bolted on, which is the collapse above.  A
+// caller that wants a metronome arms it again and says so.
+//
+// **No callback.**  `timer_spend` answers *did it fire*; it never calls
+// anything.  Same rule as `clock_advance`, and for the same reason —
+// one type serves a tick loop, a script runner and a test.
+//
+// **No pause.**  A paused timer is one nobody spends time into, and the
+// driver already decides how much time anything gets (`tick_clock.loft`
+// § WHAT IS DELIBERATELY NOT HERE).  A `paused` flag here would be a
+// second place that answers "is time passing".
+//
+// **No RATE.**  That is `tick_bank.loft`, and the whole file above is
+// why the two are not one.
+
+use tick_clock;
+
+// A one-shot duration and how much of it has been spent.
+//
+// ⚠ **Both integers, and `total == 0` is UNARMED** — the zero-default
+// that makes a partial struct literal correct everywhere this replaces
+// a `0.0` seconds field.  See the header.
+pub struct Timer {
+    // Base units spent since it was armed.  Always in `[0, total)`
+    // between calls: the call that reaches `total` fires and disarms,
+    // so a spent timer is an unarmed one rather than a saturated one.
+    spent: integer,
+
+    // The whole duration, in base units.  Zero means nothing is
+    // running.
+    total: integer,
+}
+
+// A timer nobody has armed.
+pub fn timer_new() -> Timer {
+    Timer { spent: 0, total: 0 }
+}
+
+// A timer armed for `units` — the factory, for a struct literal that
+// wants one already running.
+//
+// ⚠ `Enemy`'s pre-walk window is the case: an enemy is built already
+// standing, so the field has to arrive armed.
+pub fn timer_armed(units: integer) -> Timer {
+    if units <= 0 { return timer_new(); }
+    Timer { spent: 0, total: units }
+}
+
+// Arm it for `units`, from zero.
+//
+// ⚠ **A duration of zero or less DISARMS rather than firing.**  Both
+// readings are defensible and this one is what the call sites already
+// mean: a schedule authored with a lull of 0 sends the next wave
+// immediately because nothing is running, not because a timer fired.
+// ⚠ It also re-arms from wherever it was, so a boost pressed during a
+// boost restarts the clock rather than extending it — the behaviour the
+// float version had, stated rather than inherited.
+// Example: @FIX-011
+pub fn timer_arm(t: Timer, units: integer) {
+    t.spent = 0;
+    if units <= 0 { t.total = 0; return; }
+    t.total = units;
+}
+
+// Is this timer running — armed, and not yet fired?
+pub fn timer_running(t: const Timer) -> boolean {
+    t.total > 0
+}
+
+// Base units still to go.  Zero for a timer that is not running.
+//
+// ⚠ **The DOWN reading**, and it is a subtraction rather than a second
+// field.  `helper.recover` and `Vehicle.boost_left` were both stored
+// this way and each carried its own epsilon; there is one number now
+// and it is exact.
+pub fn timer_left(t: const Timer) -> integer {
+    if t.total <= 0 { return 0; }
+    max(t.total - t.spent, 0)
+}
+
+// Base units gone by.  Zero for a timer that is not running.
+//
+// ⚠ **The UP reading**, off the same number.  `TowerCharge.repair` was
+// stored this way — *seconds banked toward the rebuild* — because zero
+// had to mean "nobody is working on it", and that is still what an
+// unarmed timer says.
+pub fn timer_spent(t: const Timer) -> integer {
+    if t.total <= 0 { return 0; }
+    t.spent
+}
+
+// The whole duration this timer was armed for, in base units.
+pub fn timer_total(t: const Timer) -> integer {
+    t.total
+}
+
+// How far through it is, in `[0, 1)` — 0.0 for a timer that is not
+// running.
+//
+// ⚠ **The presentation door, and the one place a float appears** — a
+// HUD showing a rebuild part-done, exactly `bank_fraction`'s position
+// one family over.  Nothing in the simulation may read it: a
+// comparison against 1.0 here is the epsilon problem walking back in
+// through the display.
+pub fn timer_fraction(t: const Timer) -> float {
+    if t.total <= 0 { return 0.0; }
+    ((t.spent as float) / (t.total as float)) ?? 0.0
+}
+
+// Spend `units` of it.  Answers whether THIS call finished it.
+//
+// ⚠ **It fires exactly once and then disarms**, which is the whole
+// difference from `bank_gain`: the remainder past the boundary is
+// DISCARDED, because a one-shot's residue means nothing afterwards.
+// Carrying it would make the next arming shorter than the one before —
+// measured in `tests/26_l3` § A one-shot built on a bank, where a 5.0 s
+// cooldown costs 8 ticks the first time and 7 the second.
+//
+// ⚠ A timer that is not running answers false and stays that way, so a
+// caller may spend into it unconditionally — which is what
+// `vehicle_burn` does with the cooldown every single tick.
+//
+// ⚠ Non-positive time is dropped rather than owed, for
+// `clock_advance`'s reason: time going backwards must not un-fire
+// anything.
+// Example: @FIX-011
+pub fn timer_spend(t: Timer, units: integer) -> boolean {
+    if t.total <= 0 { return false; }
+    if units <= 0 { return false; }
+    t.spent = t.spent + units;
+    if t.spent < t.total { return false; }
+    t.spent = 0;
+    t.total = 0;
+    true
+}
+
+// Stop it without firing.
+//
+// ⚠ **A door of its own rather than `timer_arm(t, 0)`, because it is a
+// DECISION** — the same argument `bank_reset` makes.  A vehicle that
+// respawns loses the boost it was in the middle of; a cooldown that is
+// merely running keeps everything.  Two behaviours, and the one that
+// throws work away says so by name.
+pub fn timer_cancel(t: Timer) {
+    t.spent = 0;
+    t.total = 0;
+}
+
+// Put a timer back from a DOWN reading — `units` left of `total`.
+//
+// ⚠ Clamped rather than trusted, for `clock_restore`'s reason: `left`
+// past `total` is a state `timer_spend` can never leave behind, and a
+// `left` of zero or less is a timer that has already fired, which is an
+// unarmed one.
+pub fn timer_restore_left(t: Timer, left: integer, total: integer) {
+    if total <= 0 || left <= 0 { timer_cancel(t); return; }
+    t.total = total;
+    t.spent = max(total - left, 0);
+}
+
+// Put a timer back from an UP reading — `units` spent of `total`.
+//
+// ⚠ The other half, and the two are not interchangeable at the call
+// site: `emit.loft` writes whichever reading its field was authored in,
+// so a tower's rebuild round-trips as *banked* and a helper's recovery
+// as *left*.
+pub fn timer_restore_spent(t: Timer, spent: integer, total: integer) {
+    if total <= 0 || spent <= 0 { timer_cancel(t); return; }
+    if spent >= total { timer_cancel(t); return; }
+    t.total = total;
+    t.spent = spent;
+}

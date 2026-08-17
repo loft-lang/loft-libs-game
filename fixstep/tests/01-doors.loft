@@ -1,0 +1,354 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// One test per DOOR, and each one is that door's worked EXAMPLE.
+//
+// ⚠⚠ **The pair is the deliverable.**  A snippet in a doc comment rots
+// silently — nothing compiles it, so it goes stale at the first
+// signature change and the reader finds out.  A test nobody links to is
+// correct and invisible, which is how a consumer ends up hand-rolling
+// the thing the library already does.  So every public door carries an
+// `// Example: @FIX-0NN` line pointing here, and every tag below is
+// reachable from the function it demonstrates.
+//
+// ⚠ These are examples FIRST and assertions second: each one is written
+// the way a caller would actually write it, not the way that would be
+// shortest to assert on.
+use fixstep;
+
+// A step of 2/3 s in this package's first consumer's base unit — 1/3 of
+// a microsecond, 3 000 000 to the second.  ⚠ The unit is the CONSUMER's
+// choice; the library counts whatever it is handed.
+const UNITS_PER_SECOND: integer = 3000000;
+const STEP:             integer = 2000000;
+const FRAME_60:         integer = 50000;
+
+// The whole call site of a GL or browser frame loop.
+//
+// ⚠ The remainder CARRIES, which is the property everything else rests
+// on: many small frames and one big one reach the same state, so the
+// simulation is not frame-rate dependent.
+// @FIX-001 — a frame loop spends elapsed time and gets a COUNT back
+fn test_a_frame_loop_spends_its_backlog() {
+    fl_clk = clock_new(STEP);
+
+    fl_ticks = 0;
+    for _ in 0..120 {                       // two seconds at 60 fps
+        for _ in 0..clock_advance(fl_clk, FRAME_60) {
+            fl_ticks = fl_ticks + 1;        // <- the game's tick goes here
+        }
+    }
+    assert(fl_ticks == 3, "two seconds at 60 fps bought {fl_ticks} ticks of 2/3 s");
+
+    // The same two seconds delivered as ONE frame buys the same three.
+    fl_one = clock_new(STEP);
+    assert(clock_advance(fl_one, 2 * UNITS_PER_SECOND) == 3,
+           "one frame of 2 s bought a different count from 120 frames of 1/60 s");
+}
+
+// ⚠⚠ **A count is not a duration, and spelling one as the other is the
+// mistake this door exists to remove.**  Through a FLOAT accumulator,
+// `n × step` seconds comes back `n − 1` for 602 of the first 1000 `n`.
+// Here it is exact — and the door is what says so, so a caller with a
+// count never has to reach for the arithmetic.
+// @FIX-002 — a script, a test or a turn commit asks for a COUNT
+fn test_a_script_asks_for_a_count() {
+    sc_clk = clock_new(STEP);
+
+    assert(clock_step(sc_clk, 30) == 30, "a script's `tick 30` was not thirty ticks");
+
+    // ⚠ And it does not touch the bank: a count neither spends a live
+    // session's remainder nor leaves one behind.
+    clock_advance(sc_clk, FRAME_60);
+    sc_banked = clock_banked(sc_clk);
+    clock_step(sc_clk, 30);
+    assert(clock_banked(sc_clk) == sc_banked,
+           "a count spent {sc_banked - clock_banked(sc_clk)} units of somebody's frame");
+
+    // The identity the integer accumulator exists for.
+    sc_a = clock_new(STEP);
+    sc_b = clock_new(STEP);
+    for sc_n in 1..200 {
+        assert(clock_advance(sc_a, sc_n * STEP) == clock_step(sc_b, sc_n),
+               "advance(n * step) != step(n) at n = {sc_n}");
+    }
+}
+
+// ⚠ `now - last` written at the call site is where a driver gets the
+// order backwards once and silently swallows a frame.  Hand the door an
+// ABSOLUTE reading instead.
+// @FIX-003 — a server pump owns the wall, and the caller owns no subtraction
+fn test_a_server_pump_owns_the_wall() {
+    pm_clk = clock_new(STEP);
+
+    // ⚠ The FIRST call primes and answers none — a pump that treated its
+    // first reading as elapsed would open a server with the whole uptime
+    // as one burst of ticks.
+    assert(clock_pump(pm_clk, 1000000000) == 0, "the first pump answered ticks");
+
+    assert(clock_pump(pm_clk, 1000000000 + 2 * STEP) == 2, "two steps of wall, two ticks");
+    assert(clock_pump(pm_clk, 1000000000 + 3 * STEP) == 1, "one more step, one more tick");
+
+    // A wall that jumped BACKWARDS re-primes rather than owing the
+    // difference for ever.
+    assert(clock_pump(pm_clk, 500000000) == 0, "a backwards wall answered ticks");
+    assert(clock_pump(pm_clk, 500000000 + STEP) == 1, "the pump did not re-prime");
+}
+
+// ⚠⚠ **The cap DROPS the excess and must never DEFER it.**  The version
+// a driver writes by mistake clamps the answer and leaves the backlog
+// banked — which is not a cap but a deferral, and it runs the
+// simulation behind the wall for ever afterwards.
+//
+// This test is that mistake, reproduced beside the shipped door, because
+// both answer *fewer ticks on the stalled frame* and only the frame
+// AFTER tells them apart.
+// @FIX-004 — a loop that may be BACKGROUNDED caps its catch-up
+fn test_a_backgrounded_loop_drops_what_it_cannot_run() {
+    cp_clk = clock_new(STEP);
+
+    // A twenty-second stall arrives as one frame.
+    cp_ran = clock_advance_capped(cp_clk, 20 * UNITS_PER_SECOND, 4);
+    assert(cp_ran == 4, "the cap let {cp_ran} ticks through instead of 4");
+
+    // ⚠ The frame after the stall answers ONE, not a burst — the thirty
+    // ticks past the cap are GONE.
+    assert(clock_advance(cp_clk, STEP) == 1,
+           "the frame after the stall answered a burst — this is a deferral, not a cap");
+}
+
+// ⚠⚠ **This answers *where between two steps are we*, and NOT *what
+// should be drawn there*.**  The textbook use is
+// `lerp(previous, current, alpha)`, which is smooth and exactly one step
+// behind; `current + alpha·(current − previous)` is exact while the
+// velocity holds and jumps a whole step when it changes.  Which is right
+// is a function of how long the step is, so the library answers the
+// number and the renderer owns the policy.
+// @FIX-005 — drawing BETWEEN two steps
+fn test_drawing_between_two_steps() {
+    al_clk = clock_new(STEP);
+
+    al_out = 0;
+    al_max = 0.0;
+    for _ in 0..120 {
+        clock_advance(al_clk, FRAME_60);
+        al_a = clock_alpha(al_clk);
+        // <- the renderer draws at `al_a` here
+        if al_a < 0.0 || al_a >= 1.0 { al_out = al_out + 1; }
+        if al_a > al_max { al_max = al_a; }
+    }
+    // ⚠ HALF-OPEN: an alpha of exactly 1.0 would draw the NEXT state on
+    // the frame BEFORE the step that produces it.
+    assert(al_out == 0, "{al_out} of 120 frames read an alpha outside [0, 1)");
+    assert(al_max > 0.9, "the highest alpha was {al_max} — this fixture never banked "
+                       + "a part-step, so the range assertion above is two zeros");
+}
+
+// ⚠ The library owns the TIMING half of rollback exactly, and no more:
+// it cannot rewind game state without owning the game.  `clock_banked`
+// and `clock_restore` are the pair, and `clock_step` is what makes the
+// re-run bit-identical.
+// @FIX-006 — a rollback re-simulation re-runs N steps IDENTICALLY
+fn test_a_rollback_re_runs_the_same_steps() {
+    rb_clk = clock_new(STEP);
+    clock_advance(rb_clk, 7 * FRAME_60);      // land mid-step
+    rb_saved = clock_banked(rb_clk);
+
+    // ⚠ 33 frames, NOT 40, and the number is the control's: 40 frames
+    // are exactly one step, so a clock that forgot its carry would
+    // answer the same count and the replay would look correct.  33
+    // frames only reach the boundary WITH the restored remainder.
+    rb_first = clock_advance(rb_clk, 33 * FRAME_60);
+
+    // Rewind and replay the identical stream.
+    rb_back = clock_new(STEP);
+    clock_restore(rb_back, rb_saved);
+    rb_again = clock_advance(rb_back, 33 * FRAME_60);
+
+    assert(rb_first == rb_again && clock_banked(rb_clk) == clock_banked(rb_back),
+           "the replay played {rb_again} steps against {rb_first}, banking "
+           + "{clock_banked(rb_back)} against {clock_banked(rb_clk)}");
+
+    // The control, in the same function: a rollback that dropped the
+    // remainder answers a DIFFERENT count over the identical stream.
+    rb_zero = clock_new(STEP);
+    rb_lost = clock_advance(rb_zero, 33 * FRAME_60);
+    assert(rb_lost != rb_again,
+           "a clock restored to zero played {rb_lost} steps too — this stream cannot "
+           + "see a dropped remainder, so the replay assertion above proves nothing");
+}
+
+// ⚠ **A RATIONAL, so it is exact for ever.**  `elapsed * 0.3333…`
+// drifts against a rate it could not state in the first place; `1/3`
+// carries its remainder and does not.
+// @FIX-007 — pause, slow motion, fast forward
+fn test_pause_and_slow_motion() {
+    rt_clk = clock_new(STEP);
+
+    clock_set_rate(rt_clk, 0, 1);                       // pause
+    assert(clock_advance(rt_clk, 10 * UNITS_PER_SECOND) == 0, "a paused clock ticked");
+
+    // ⚠⚠ A paused clock can still run its own tests: the rate scales
+    // every DURATION door and NO count door.
+    assert(clock_step(rt_clk, 5) == 5, "a paused clock refused a script's count");
+
+    clock_set_rate(rt_clk, 1, 3);                       // a third of speed
+    rt_n = clock_advance(rt_clk, 60 * UNITS_PER_SECOND);
+    assert(rt_n == 30, "a wall minute at 1/3 speed bought {rt_n} ticks of 2/3 s, not 30");
+
+    clock_set_rate(rt_clk, 3, 1);                       // triple
+    assert(clock_advance(rt_clk, UNITS_PER_SECOND) == 4,
+           "triple speed did not treble the wall");
+}
+
+// The case is a strategy layer over a unit layer: units at 30 Hz, the
+// economy at 1 Hz, driven by the ticks that actually happened.
+//
+// ⚠ **A driven clock LAGS its driver by less than one fast step and
+// never leads** — the fast clock's own bank is time that has not become
+// a tick yet, so it has not been handed on.  That is the correct answer
+// rather than an approximation.
+// @FIX-008 — a slow layer driven by a fast one
+fn test_a_slow_layer_driven_by_a_fast_one() {
+    dr_fast = clock_new(100000);       // 1/30 s
+    dr_slow = clock_new(3000000);      // 1 s
+
+    dr_slow_n = 0;
+    for _ in 0..600 {                  // ten seconds of 60 fps frames
+        dr_slow_n = dr_slow_n + clock_drive(dr_slow, dr_fast,
+                                            clock_advance(dr_fast, FRAME_60));
+    }
+    assert(dr_slow_n == 10, "ten seconds drove {dr_slow_n} one-second steps");
+}
+
+// ⚠⚠ **A `Bank` holds the CARRY and nothing else.**  The rate arrives
+// per call, because *a damaged robot moves slower* makes speed a
+// property of a CONDITION rather than of the mover; and `whole` is a
+// PARAMETER rather than a field, because loft defaults an omitted struct
+// field silently — a bank carrying its own scale would default to zero
+// in every partial literal and freeze that mover.
+// @FIX-009 — a mover spends a RATE and gets whole units
+fn test_a_mover_spends_a_rate() {
+    mv_b    = bank_new();
+    mv_rate = bank_rate(2.5);                       // 2.5 hexes a second
+    mv_whole = bank_whole(UNITS_PER_SECOND);
+
+    mv_moved = 0;
+    for _ in 0..90 {                                // sixty seconds of 2/3 s steps
+        mv_moved = mv_moved + bank_gain(mv_b, mv_rate, STEP, mv_whole);
+    }
+    // ⚠ EXACT: 2.5 hex/s for 60 s is 150, and no epsilon anywhere.
+    assert(mv_moved == 150, "2.5 hex/s over a simulated minute covered {mv_moved}");
+
+    // ⚠ And the same minute delivered in TENTHS of a step covers the
+    // same ground — a rate is a rate, whatever the timestep is.
+    mv_c = bank_new();
+    mv_fine = 0;
+    for _ in 0..900 {
+        mv_fine = mv_fine + bank_gain(mv_c, mv_rate, STEP / 10 ?? 0, mv_whole);
+    }
+    assert(mv_fine == 150, "the same minute at a tenth of the step covered {mv_fine}");
+}
+
+// ⚠ The two are separate doors because a caller that asks once per FRAME
+// and moves once per STEP would otherwise consume the carry sixty times
+// a tick.  `bank_most` is the CEILING and it touches nothing.
+// @FIX-010 — asking how far, WITHOUT spending it
+fn test_asking_without_spending() {
+    as_b     = bank_new();
+    as_rate  = bank_rate(3.0);
+    as_whole = bank_whole(UNITS_PER_SECOND);
+
+    as_ceiling = bank_most(as_rate, STEP, as_whole);
+    assert(as_ceiling == 2, "3 hex/s over 2/3 s can reach {as_ceiling} hexes, not 2");
+
+    // Asked sixty times, the bank is untouched.
+    for _ in 0..60 { bank_most(as_rate, STEP, as_whole); }
+    assert(bank_progress(as_b) == 0, "asking spent {bank_progress(as_b)} of the carry");
+}
+
+// ⚠⚠ **A `Timer` is NOT a `Bank`, and the refutation is measured rather
+// than argued.**  A one-shot built on a bank fires a SECOND time with
+// nobody re-arming it, and carries its residue into the next arming — so
+// a 5 s cooldown costs 8 steps the first time and 7 the second.  A
+// bank's remainder is load-bearing for ever; a one-shot's dies at its
+// boundary, and picking the wrong one is silent.
+// @FIX-011 — a cooldown, a countdown, a lull
+fn test_a_cooldown_fires_once_exactly() {
+    cd_t = timer_new();
+    timer_arm(cd_t, 5 * UNITS_PER_SECOND);
+
+    cd_fired = 0;
+    cd_steps = 0;
+    for _ in 0..40 {
+        if timer_running(cd_t) {
+            cd_steps = cd_steps + 1;
+            if timer_spend(cd_t, STEP) { cd_fired = cd_fired + 1; }
+        }
+    }
+    // ⚠ 5 s is seven and a half steps of 2/3 s, so it fires on the
+    // EIGHTH — and exactly once, however long the loop runs.
+    assert(cd_fired == 1 && cd_steps == 8,
+           "the cooldown fired {cd_fired} times over {cd_steps} steps");
+
+    // Re-arming starts clean: the second run costs the same as the first.
+    timer_arm(cd_t, 5 * UNITS_PER_SECOND);
+    cd_again = 0;
+    for _ in 0..40 {
+        if timer_running(cd_t) {
+            cd_again = cd_again + 1;
+            timer_spend(cd_t, STEP);
+        }
+    }
+    assert(cd_again == cd_steps,
+           "the second arming cost {cd_again} steps against the first's {cd_steps} — a "
+           + "residue leaked across the boundary, which is what a BANK would do");
+}
+
+// ⚠⚠ **The exponential form COMPOSES and the linear one does not**, so
+// the picture does not depend on how the frames happened to be cut.
+// The linear version is reproduced here as the control — without it this
+// test is green for an ease that ignores `dt` entirely.
+// @FIX-012 — an eased value, and why it is not `k · dt`
+fn test_an_eased_value_is_frame_rate_independent() {
+    ea_k = 6.0;
+
+    ea_one = approach(0.0, 1.0, ea_k, 1.0);
+    ea_many = 0.0;
+    for _ in 0..60 { ea_many = approach(ea_many, 1.0, ea_k, 1.0 / 60.0); }
+    assert(abs(ea_one - ea_many) < 1e-12,
+           "one frame of 1 s gave {ea_one} and sixty of 1/60 s gave {ea_many}");
+
+    // The control: the linear form a consumer reaches for instead.
+    el_one = 0.0 + (1.0 - 0.0) * min(ea_k * 1.0, 1.0);
+    el_many = 0.0;
+    for _ in 0..60 { el_many = el_many + (1.0 - el_many) * min(ea_k / 60.0, 1.0); }
+    assert(abs(el_one - el_many) > 1e-3,
+           "the linear form agreed to {abs(el_one - el_many)} — this gate cannot tell "
+           + "the two forms apart, so its green means nothing");
+
+    // ⚠ A frame with no time in it moves nothing, which is what a PAUSED
+    // consumer hands down.
+    assert(ease_fraction(ea_k, 0.0) == 0.0, "a zero-length frame closed part of the gap");
+}
+
+// ⚠⚠ **A real key set reaches the wrong-way swing.**  A bearing of 360°
+// and a target of 60° is a true turn of 60°; eased as plain numbers it
+// is −300°, and the value spins five sixths of a circle the wrong way
+// while looking correct the whole time.
+// @FIX-013 — easing an ANGLE, the short way round
+fn test_easing_an_angle_takes_the_short_way() {
+    an_turn = wrap_delta(60.0 - 360.0);
+    assert(an_turn == 60.0, "the short way from 360 to 60 is {an_turn} degrees");
+
+    // Eased, it arrives by going UP through 0 rather than down through 180.
+    an_now = 360.0;
+    for _ in 0..30 { an_now = approach_angle(an_now, 60.0, 6.0, 1.0 / 60.0); }
+    assert(an_now > 0.0 && an_now < 60.0,
+           "half a second of easing reached {an_now} degrees — outside (0, 60) means it "
+           + "went the long way");
+
+    // ⚠ And the answer stays in [0, 360): an angle that drifted negative
+    // would compare wrongly against every other bearing in the consumer.
+    assert(wrap_deg(-90.0) == 270.0, "wrap_deg(-90) is {wrap_deg(-90.0)}");
+}

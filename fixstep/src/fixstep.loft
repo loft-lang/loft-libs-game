@@ -1,0 +1,124 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// fixstep — a fixed simulation step, in exact integer time.
+//
+// ── ⚠⚠ WHY THIS PACKAGE EXISTS, COUNTED RATHER THAN ARGUED ──────
+//
+// Before it, two loft games had **nine** independent implementations of
+// *do not lose a fraction* between them, and one of them was wrong in a
+// way no test in either repo could see:
+//
+//   * dryopea had **seven** — a frame accumulator, three movers, three
+//     one-shot timers — each with its own epsilon or, in the case of the
+//     PLAYER, with none and none correct.  Measured over one simulated
+//     minute at seven tick lengths, the player covered
+//     **180 / 120 / 180 / 0 / 0 / 0 / 0** hexes against a true 180, and
+//     stopped moving entirely under a 250 ms tick.
+//   * moros had **two** more (a page backlog cap and a server rate
+//     scaler) plus a `TICK_US` of its own, having already learned the
+//     same lesson one unit up: it integrated `steps × TICK_US` in a
+//     single pass and got machine-dependent trajectories.
+//
+// ⚠ **Every one of them existed because there was nothing to consume.**
+// So the admission test for this package is not a size budget, it is the
+// opposite: *could a consumer be tempted to hand-roll this?*  If yes it
+// belongs in — built once, tested once, and never argued about again.
+//
+// ── THE INVARIANT ───────────────────────────────────────────────
+//
+// > **Every DURATION is an exact integer count of one chosen base unit,
+// > and every RATE is consumed by an integer accumulator that carries
+// > its remainder.  Floating point appears only where something is
+// > DRAWN.**
+//
+// That is falsifiable: a site that keeps a float duration, or that drops
+// a remainder, breaks it.  ⚠ `approach` is the one thing inside the
+// package and outside the invariant, and it says so itself.
+//
+// ── THREE TYPES, AND PICKING THE WRONG ONE IS SILENT ────────────
+//
+// | you have | you want | why not the others |
+// |---|---|---|
+// | wall time, and a simulation to step | `TickClock` | — |
+// | a rate, and whole units to spend | `Bank` | a bank's remainder is load-bearing FOR EVER |
+// | a duration that fires ONCE | `Timer` | a one-shot's remainder dies at its boundary |
+//
+// ⚠⚠ **`Timer` is not a `Bank` and must not become one**, and the
+// refutation is measured rather than asserted (`@FIX-011`): a one-shot
+// built on `bank_gain` fires a SECOND time with nobody re-arming it, and
+// carries its residue into the next arming — a 5 s cooldown costs 8
+// ticks the first time and **7** the second.
+//
+// ── THE TWO RULES UNDER ALL OF IT ───────────────────────────────
+//
+// 1. **No callbacks and no inversion of control.**  Nothing here calls
+//    your tick; it answers *how many*.  That is what lets one clock
+//    serve a frame loop, a server pump, a script runner and a test.
+//    ⚠ It is also what makes the surface affordable to grow: a new door
+//    is a function a caller may ignore, never a shape every caller must
+//    adopt.
+// 2. **Defaults mean *the behaviour you already had*.**
+//    `clock_new(step)` takes one argument, and a clock nobody configures
+//    is uncapped, unscaled and carries its remainder.
+//
+// ── ⚠ A DOOR PER USE CASE, so flexibility costs nothing at the call
+//    site ──────────────────────────────────────────────────────────
+//
+// The surface grows in DOORS, never in parameters — one function per way
+// a game drives a clock, each with the arguments that case actually has
+// and no others.  **Every row has a test named for its case, and the
+// test IS the example**: a snippet in prose rots because nothing
+// compiles it, and a test nobody links to is invisible, which is how a
+// consumer ends up rebuilding what already exists.
+//
+// | the case | the door | the example |
+// |---|---|---|
+// | a frame loop (GL, browser) | `clock_advance(clk, elapsed)` | `@FIX-001` |
+// | a script, a test, a turn commit | `clock_step(clk, n)` | `@FIX-002` |
+// | a server pump owning the wall | `clock_pump(clk, now)` | `@FIX-003` |
+// | a loop that may be BACKGROUNDED | `clock_advance_capped(clk, dt, max)` | `@FIX-004` |
+// | drawing between two steps | `clock_alpha(clk)` | `@FIX-005` |
+// | a rollback re-simulation | `clock_restore` + `clock_step` | `@FIX-006` |
+// | pause, slow-mo, fast-forward | `clock_set_rate(clk, num, den)` | `@FIX-007` |
+// | a slow layer over a fast one | `clock_drive(slow, fast, n)` | `@FIX-008` |
+// | a mover spending a rate | `bank_gain(b, rate, elapsed, whole)` | `@FIX-009` |
+// | asking without spending | `bank_most(rate, elapsed, whole)` | `@FIX-010` |
+// | a cooldown, a countdown, a lull | `timer_arm` + `timer_spend` | `@FIX-011` |
+// | an eased camera or value | `approach(now, want, k, dt)` | `@FIX-012` |
+//
+// ⚠ **Nothing here is a mode flag on another door.**  A count and a
+// duration look like one question with a switch, and they are not:
+// spelling a count as `n × step` in FLOAT seconds is wrong for **602 of
+// the first 1000 `n`**, which is the measurement this package's first
+// consumer made one level up before this package existed.
+//
+// ⚠ **The doors are THIN and share ONE accumulator.**  Five entry points
+// over five copies of the arithmetic would be the nine-sites problem
+// wearing a library's clothes; five over one is the point.
+//
+// ── ⚠ WHAT IS DELIBERATELY NOT HERE ─────────────────────────────
+//
+// **No tick BODY.**  What one step DOES is the game's — one consumer
+// walks a continuous person, the other steps a lattice roster.
+//
+// **No netcode, no rollback, no snapshots.**  Rollback rewinds GAME
+// STATE, which this cannot hold without owning the game.  What it owns
+// is the timing half exactly: `clock_banked` / `clock_restore` plus an
+// exact `clock_step` re-runs N steps identically.  ⚠ The line is *this
+// owns everything a game would rebuild about TIME*, not everything a
+// game would rebuild.
+//
+// **No interpolation POLICY.**  `clock_alpha` answers *where between two
+// steps are we*; it does not answer *what should be drawn there*.  Its
+// first consumer measured three answers and shipped none, because their
+// prices sit on three different axes and which one wins is a function of
+// how long the step is.  See `clock_alpha`.
+//
+// **No tick COUNTER.**  A game already counts its own ticks, and a
+// second counter beside it is two facts that can disagree.
+
+use tick_clock;
+use tick_bank;
+use tick_timer;
+use ease;

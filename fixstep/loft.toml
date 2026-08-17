@@ -1,0 +1,19 @@
+[package]
+name    = "fixstep"
+version = "0.1.0"
+loft    = ">=0.8"
+repository = "loft-libs-game"
+description = "A fixed simulation step in exact integer time — clock, bank, one-shot timer"
+
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+[library]
+entry = "src/fixstep.loft"
+
+# ⚠ **NO DEPENDENCIES, AND THAT IS THE POINT.**  This package is integer
+# arithmetic over three small structs plus one float ease.  A timing
+# library that pulled in a renderer, a lattice or a game's own types
+# could not be consumed by the next game — which is the whole reason
+# there were NINE hand-rolled copies of it across two games before it
+# existed.

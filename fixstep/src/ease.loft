@@ -1,0 +1,114 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The ease — a frame-rate-independent approach, and its short-way angle.
+//
+// ── ⚠⚠ THE ONE THING IN THIS PACKAGE THAT IS OUTSIDE ITS INVARIANT
+//
+// `fixstep` § THE INVARIANT says every duration is an exact integer and
+// floating point appears only where something is DRAWN.  This module is
+// the *where something is drawn* half, and it is float by nature: it is
+// a PRESENTATION rate over real frame time, not a simulation step.
+//
+// ⚠ It is in the package anyway, and the reason is the package's own
+// admission test — *could a consumer be tempted to hand-roll this?*
+// **Both** loft games did, and **one of them got it wrong**:
+//
+//     // game A
+//     fn cam_approach(now, want, k, dt) { now + (want - now) * (1 - exp(-k*dt)) }
+//     // game B — same name, same signature, different arithmetic
+//     fn cam_approach(now, want, k, dt) { f = k*dt; if f > 1 { f = 1 } … }
+//
+// ── ⚠⚠ AND `k · dt` IS FRAME-RATE DEPENDENT, WHICH IS THE WHOLE POINT
+//
+// The linear form settles somewhere different depending on how the
+// frames happened to be cut, and that is not a rounding difference —
+// measured, easing 0 → 1 over one second:
+//
+//     linear       one frame of 1 s  1.0           sixty of 1/60 s  0.9982029897
+//     exponential  one frame of 1 s  0.9975212478  sixty of 1/60 s  0.9975212478
+//
+// — **identical to the bit**, because `1 − e^(−k·dt)` COMPOSES: sixty
+// factors of `e^(−k/60)` are one factor of `e^(−k)`.  ⚠ That is an exact
+// property of the function rather than a tolerance, which is what lets a
+// gate photograph a camera after N seconds without asking how the frames
+// were cut — the same property `clock_advance` has one family over, and
+// the reason both belong in one package.
+//
+// ⚠ A game at a locked frame rate can use the linear form and never
+// notice.  A game that ships to a browser cannot.
+//
+// ── ⚠ WHAT IS NOT HERE ──────────────────────────────────────────
+//
+// **No rest tolerance, and no snap.**  An exponential approach is
+// asymptotic, so a consumer that needs *arrived* must decide what that
+// means and write the value exactly — otherwise where it stopped is a
+// function of how the frames fell.  That is a per-valve decision (a
+// camera's position, an angle and a zoom do not share an epsilon), so
+// this answers the step and the consumer owns the boundary.
+//
+// **No rate constant.**  `k` is tuning, and tuning belongs to the game.
+
+// What one frame of `dt` closes of a gap, in `[0, 1)`.
+//
+// ⚠ Zero for a frame with no time in it — which is what a PAUSED
+// consumer hands down, and it must not creep.
+//
+// Example: @FIX-012
+pub fn ease_fraction(k: float, dt: float) -> float {
+    if dt <= 0.0 { return 0.0; }
+    1.0 - exp(-(k * dt))
+}
+
+// Move `now` toward `want` by one frame's worth.
+//
+// ⚠ **`k` is the gap fraction closed per SECOND**, so it is a rate and
+// not a step: an approach chasing something moving at `v` settles at a
+// steady lag of `v / k`.  ⚠⚠ That derivation assumes a CONTINUOUS
+// target — against one that stands still and then jumps a whole step,
+// the real excursion is the step, not `v / k`, and a consumer that
+// sized `k` on the formula will be out by the ratio of the two
+// (measured at **3.7x** in this package's first consumer).
+//
+// Example: @FIX-012
+pub fn approach(now: float, want: float, k: float, dt: float) -> float {
+    now + (want - now) * ease_fraction(k, dt)
+}
+
+// An angle in degrees, folded into `[0, 360)`.
+pub fn wrap_deg(a: float) -> float {
+    wd = a % 360.0;
+    if wd < 0.0 { wd = wd + 360.0; }
+    wd
+}
+
+// A DIFFERENCE of angles, folded into `(−180, 180]` — the short way
+// round.
+//
+// ⚠⚠ **This is not defensive tidying, and a real key set reaches the
+// wrong-way swing.**  In this package's first consumer, holding one key
+// gives a bearing of 360° and adding a second gives 60°.  The true turn
+// is 60°; eased as plain numbers it is **−300°**, and the camera spins
+// five sixths of a circle the wrong way on one extra keypress — while
+// looking like a working camera the whole time, which is why it needs a
+// test rather than an eye.
+//
+// Example: @FIX-013
+pub fn wrap_delta(d: float) -> float {
+    wl = d % 360.0;
+    if wl > 180.0   { wl = wl - 360.0; }
+    if wl <= -180.0 { wl = wl + 360.0; }
+    wl
+}
+
+// Move an ANGLE toward another by one frame's worth, the short way.
+//
+// ⚠ A separate door from `approach` rather than a flag on it: an angle
+// is not a number that happens to wrap, and a consumer that eased a
+// bearing with `approach` gets a camera that is correct at every angle
+// except across the seam.
+//
+// Example: @FIX-013
+pub fn approach_angle(now: float, want: float, k: float, dt: float) -> float {
+    wrap_deg(now + wrap_delta(want - now) * ease_fraction(k, dt))
+}

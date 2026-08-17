@@ -11,4 +11,4 @@ jobs:
   ci:
     uses: loft-lang/loft/.github/workflows/library-ci-reusable.yml@main
     with:
-      packages: '["input", "time"]'
+      packages: '["input", "time", "fixstep"]'

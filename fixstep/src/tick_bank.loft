@@ -1,0 +1,255 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A rate consumed in whole units, in exact integer arithmetic —
+// plan 26 phase L2.
+//
+// ── What this replaces, and why there were three of it ───────────
+//
+// `plans/26` § 2 counted **seven** independent sites in dryopea that
+// re-assert *do not lose a fraction*, and found that omitting it is
+// SILENT.  Three of them were the same arithmetic written three times:
+//
+//     progress += speed * tick_seconds;
+//     whole     = (progress + EPSILON) as integer;
+//     progress -= whole;
+//
+// in `spawn.loft::enemy_bank`, `helper.loft::helper_bank` — and NOT in
+// `vehicle.loft`, which truncated and carried nothing.  That omission
+// is `@D003`: measured over one simulated minute at seven tick
+// lengths, every banked mover held its rate and the player read
+// **180 / 120 / 180 / 0 / 0 / 0 / 0** hexes against a true 180
+// (`@M030`).  A fourth site was needed and nobody wrote it, because
+// there was nothing to consume.
+//
+// ⚠ **The epsilon was load-bearing and is now GONE.**  `@M017`
+// measured that zeroing `ENEMY_PROGRESS_EPSILON` turned 7 of 1149
+// tests red and `scripts/validate.sh` with them — three ticks of
+// `2.5 * (1.0/1.5)` sum to 4.999999999999999, so the fifth hex existed
+// only because the constant released it.  Integer arithmetic has no
+// such hair: five thirds of a tick is `10 000 000 / 3 000 000` exactly
+// and the fifth hex is simply there.  **An epsilon is what you need
+// when the arithmetic cannot state the answer**; this file states it.
+//
+// ── ⚠⚠ THE RATE IS SCALED AND THE TIME IS NOT ───────────────────
+//
+// Two quantities meet here and only one of them can be exact for free.
+//
+//   * **Time** is already an exact integer count of the clock's base
+//     unit (`tick_clock.loft` § THE BASE UNIT IS A CHOICE — 1/3 µs, so
+//     that dryopea's 2/3-second tick is a whole number).  It arrives
+//     exact and leaves exact.
+//   * **A rate** is an authored design number in `numbers.json`
+//     (`1.0`, `1.5`, `2.5`, `3.0`, `6.0` hex/s) and reaches the mover
+//     as a `float`, because `@X061` puts the lookup at the CALL SITE
+//     so that *a damaged robot moves slower* can change it within a
+//     life.  So it is QUANTISED, once, at the door: `bank_rate` rounds
+//     to millionths of a unit per second.
+//
+// ⚠ **That quantisation is a tolerance on the RATE and never on the
+// CARRY**, which is the whole distinction the epsilon used to blur.
+// Every speed dryopea authors is exact in millionths; a rate that is
+// not lands on the nearest millionth and is then consumed exactly, for
+// ever, with no drift — where the float version drifted against a rate
+// it could state perfectly.
+//
+// ⚠ **Why not carry the reciprocal instead** — "base time units per
+// whole unit", which would make this file `clock_advance` with a
+// variable step and need no scale at all.  Because it is *inexact for
+// the rates this game already sweeps*: 3 000 000 / 2.25 is
+// 1 333 333.33, and `@M013`'s speed sweep includes 2.25.  A rate
+// scaled UP is exact for every authored number; a rate inverted is not.
+// That asymmetry is the reason `Bank` is not `TickClock` wearing a
+// different name.
+//
+// ── ⚠ WHAT THE BANK HOLDS, AND WHAT IT DOES NOT ─────────────────
+//
+// It holds **the carry and nothing else** — one integer.  In
+// particular it does NOT hold:
+//
+//   * **the rate**, because `@X061` says a rate is a property of the
+//     mover's CONDITION rather than of its class, so it arrives per
+//     call;
+//   * **`whole`** — how much banked progress makes one unit — because
+//     that is a property of the CLOCK, there is one clock, and a
+//     `Bank` field that carried it would make every partial struct
+//     literal a silent trap.  ⚠ loft defaults an omitted field
+//     silently ([loft#914]) and dryopea builds `Enemy` from partial
+//     literals in a dozen places; a defaulted `whole` of 0 is a mover
+//     that never moves.  A defaulted CARRY of 0 is a fresh bank, which
+//     is exactly right.
+//
+// ⚠ So `Bank { }` is correct-neutral, and that is a deliberate choice
+// paid for with one extra argument on three call sites inside `src/`.
+// No test ever writes `whole`.
+//
+// ── ⚠ IT IS NOT A TIMER, AND THE TWO MUST NOT SHARE A PRIMITIVE ──
+//
+// A bank's remainder is load-bearing for ever: a scout that banked
+// two-thirds of a hex is two-thirds of a hex closer, permanently.  A
+// one-shot timer's remainder dies at its boundary — `helper_recover_
+// tick`'s 90 ticks and `tower_repair_tick`'s 20 s fire once and the
+// residue means nothing afterwards.  `plans/26` § The invariant keeps
+// them apart as ARITHMETIC, and L3 builds `Timer` beside this rather
+// than on top of it.  ⚠ One clever type that "handles both" is the
+// over-unification this plan was written to avoid.
+
+use tick_clock;
+
+// How finely a rate is quantised: millionths of a whole unit per
+// second.
+//
+// ⚠ **A tolerance on the RATE, and the only approximation in this
+// file.**  Every speed `numbers.json` authors — 1.0, 1.5, 2.5, 3.0,
+// 6.0 hex/s — is an exact multiple of a millionth, so today it is not
+// an approximation at all.  It becomes one the day a design number
+// needs a seventh decimal, and then it is a rate 1e-6 off consumed
+// exactly, rather than the right rate consumed badly.
+pub const BANK_RATE_SCALE: integer = 1000000;
+
+// How much banked progress makes ONE whole unit, for a bank driven by
+// dryopea's clock.
+//
+// ⚠ **The CONSUMER's constant, exactly as `CLOCK_UNITS_PER_SECOND`
+// is.**  It is `units per second × rate scale` because progress
+// accumulates `rate × elapsed`: a rate quoted per second, multiplied
+// by a time quoted in base units, has both scales in it.  A game whose
+// clock counts something else derives its own with `bank_whole`.
+pub const BANK_WHOLE: integer = CLOCK_UNITS_PER_SECOND * BANK_RATE_SCALE;
+
+// Progress banked toward the next whole unit.
+//
+// ⚠ **One field, and the struct exists so the caller cannot forget to
+// write the remainder back.**  loft has no by-reference integer, so a
+// free function over an `integer` would have to answer a pair and
+// leave the carry to the call site — which is the seven-sites problem
+// wearing a library's clothes.  Passed as a parameter it aliases, so
+// `bank_gain` updates it in place and answers only the whole units.
+pub struct Bank {
+    // Always in `[0, whole)` between calls.  Zero is a fresh bank,
+    // which is what makes `Bank { }` correct — see the header.
+    progress: integer,
+}
+
+// A bank with nothing carried.
+pub fn bank_new() -> Bank {
+    Bank { progress: 0 }
+}
+
+// How much banked progress makes one whole unit, for a clock counting
+// `units_per_second` base units a second.
+//
+// ⚠ dryopea's answer is the `BANK_WHOLE` constant above; this is the
+// derivation, for a consumer whose clock counts something else.
+pub fn bank_whole(units_per_second: integer) -> integer {
+    max(units_per_second, 1) * BANK_RATE_SCALE
+}
+
+// Quantise a rate quoted in whole units per second.
+//
+// ⚠ **It ROUNDS rather than truncating**, and the difference is
+// visible at every rate that is not a whole millionth: truncating
+// would make a mover systematically slower, which is the shape of
+// defect this whole plan exists to remove.  ⚠ Truncation is also what
+// `@D003` was — the same mistake one unit further out.
+pub fn bank_rate(per_second: float) -> integer {
+    if per_second <= 0.0 { return 0; }
+    br_s = per_second * (BANK_RATE_SCALE as float) + 0.5;
+    br_s as integer? ?? 0
+}
+
+// Gain ground at `rate` for `elapsed` base time units, and answer the
+// whole units it releases.  The remainder stays banked.
+//
+// ⚠ **This is the one implementation of *do not lose a fraction* in
+// dryopea**, and it is exact: `progress` is an integer, `rate ×
+// elapsed` is an integer, and a whole unit costs an integer, so there
+// is nothing to round and no epsilon to get the direction of wrong
+// (`CLAUDE.md` § Timers and epsilons: *neither direction is safe*).
+//
+// ⚠ **A rate of zero banks nothing and keeps what is banked** — a
+// mover that stops has not forgotten how far it had come.  Same for a
+// non-positive `elapsed`: `tick_clock.loft` gives the reason time
+// going backwards must be dropped rather than owed.
+//
+// ⚠ **What it does NOT do is decide whether the mover may move.**
+// `enemy_tick` asks the pre-walk window first, `helper_tick` asks
+// whether the crew member is alive; a bank that knew about standing
+// would have to know about every other reason not to move too.
+// Example: @FIX-009
+pub fn bank_gain(b: Bank, rate: integer, elapsed: integer,
+                 whole: integer) -> integer {
+    if rate <= 0 || elapsed <= 0 || whole <= 0 { return 0; }
+    b.progress = b.progress + rate * elapsed;
+    bg_units   = (b.progress / whole) ?? 0;
+    b.progress = b.progress - bg_units * whole;
+    bg_units
+}
+
+// The MOST one step at `rate` over `elapsed` could release — the
+// ceiling, carry included, touching no bank.
+//
+// ⚠ **An upper bound is a different question from a release**, and
+// conflating them is what a caller does when it has no bank to spend.
+// `play.loft::play_steer_reach` is the case: it asks how far ahead a
+// held key should point, which must exceed anything one tick can
+// cover, and it must not consume the player's carry to find out.
+// Example: @FIX-010
+pub fn bank_most(rate: integer, elapsed: integer, whole: integer) -> integer {
+    if rate <= 0 || elapsed <= 0 || whole <= 0 { return 0; }
+    ((rate * elapsed + whole - 1) / whole) ?? 0
+}
+
+// What is banked, in raw progress.
+//
+// ⚠ **Readable so a run can be COMPARED and RESTORED** —
+// `compare.loft::state_diff` reads it as part of a mover's state, and
+// it is an integer now, so the comparison is exact without the
+// "floats EXACTLY" argument that file had to make.
+pub fn bank_progress(b: const Bank) -> integer {
+    b.progress
+}
+
+// What is banked, as a fraction of a whole unit.
+//
+// ⚠ **The AUTHORING door, and the one place a float appears** —
+// `emit.loft` writes a captured situation as `.keys` text and
+// `script.loft` reads it back, and *hexes* is the unit a person
+// authors in.  The round trip is exact because a double carries 53
+// bits and `BANK_WHOLE` needs 42: `bank_restore_fraction` recovers the
+// integer this answered.
+pub fn bank_fraction(b: const Bank, whole: integer) -> float {
+    if whole <= 0 { return 0.0; }
+    ((b.progress as float) / (whole as float)) ?? 0.0
+}
+
+// Put a bank back where it was, in raw progress.
+//
+// ⚠ Clamped into `[0, whole)` rather than trusted, for the reason
+// `clock_restore` clamps: a carry at or past a whole unit is a state
+// `bank_gain` can never leave behind, and accepting one would release
+// a unit nothing paid for.
+pub fn bank_restore(b: Bank, progress: integer, whole: integer) {
+    if progress <= 0 || whole <= 0 { b.progress = 0; return; }
+    b.progress = (progress % whole) ?? 0;
+}
+
+// Put a bank back from a fraction of a whole unit — `bank_fraction`'s
+// other half.
+pub fn bank_restore_fraction(b: Bank, units: float, whole: integer) {
+    if units <= 0.0 || whole <= 0 { b.progress = 0; return; }
+    brf_p = units * (whole as float) + 0.5;
+    bank_restore(b, brf_p as integer? ?? 0, whole);
+}
+
+// Throw the carry away.
+//
+// ⚠ **Deliberately a door of its own rather than `bank_restore(b, 0)`,
+// because it is a DECISION.**  A helper that comes back from recovery
+// is a repaired vehicle rather than the wreck that was carried in, so
+// its banked ground goes with the damage; an enemy that is merely
+// blocked keeps everything.  Two behaviours, and the one that discards
+// says so by name.
+pub fn bank_reset(b: Bank) {
+    b.progress = 0;
+}

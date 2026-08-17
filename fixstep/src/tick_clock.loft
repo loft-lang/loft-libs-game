@@ -1,0 +1,561 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The fixed step, in exact integer time — plan 26 phase L1.
+//
+// ── What this replaces, and why it is not a tidy-up ──────────────
+//
+// `play.loft` banked elapsed time as a FLOAT and spent it one tick at
+// a time:
+//
+//     ps.banked += seconds;
+//     while ps.banked >= TICK_SECONDS { ps.banked -= TICK_SECONDS; … }
+//
+// That is correct in the property it was built for — the remainder
+// CARRIES, so 1200 frames of 1/60 s and one frame of 20 s reach the
+// same state — and wrong in one it was not: **a subtraction chain over
+// a repeating fraction loses the last tick**, for 602 of the first
+// 1000 counts (`tests/19_p1` § A count asked for in seconds comes back
+// short).  Plan 19 P1 worked around it by refusing to spell a count as
+// a duration; this file removes the arithmetic that made the
+// workaround necessary.
+//
+// ⚠ **An integer accumulator has no rounding to carry**, so the
+// identity is exact by construction rather than by argument:
+//
+//     clock_advance(clk, n * step) == clock_step(clk, n)   for all n
+//
+// and `tests/26_l1_the_clock.loft` sweeps it over 1..100000 with the
+// float path beside it as the control — because a gate that only
+// showed integers agreeing with integers would be measuring nothing
+// (`@M022`'s lesson: *can this gate produce a non-trivial reading at
+// all?*).
+//
+// ── ⚠⚠ THE BASE UNIT IS A CHOICE, AND µs IS THE WRONG ONE ────────
+//
+// The step has to be an exact integer number of base units or the
+// whole construction collapses back into rounding.  dryopea's tick is
+// **2/3 of a second**, and `1e6 / 1.5` is **666 666.67** — so there is
+// no integer number of MICROSECONDS that is today's tick.
+//
+// ⚠ `plans/26` § Open questions recommended **666 667 µs**, *"today's
+// tick to within 1e-6 s"*, on the reasoning that it *"moves nothing"*.
+// **Measured, it moves seventeen tests** (`@M031`): the 654 scenario
+// measurements do not budge, but `TICK_SECONDS` derived from it is
+// `0.666667` rather than `0.6666666666666666`, and a dozen assertions
+// are pinned to the exactness of the latter — `23_k2a`'s carry is no
+// longer 0.0 to the bit, `3.0 * TICK_SECONDS` is no longer exactly 2,
+// and two frame-accumulation tests land a tick out.  *A step chosen to
+// look like the tick is not the tick.*
+//
+// ⚠⚠ **So the base unit is 1/3 of a microsecond — 3 000 000 a second —
+// and it is chosen for exactly one reason: it is the coarsest unit in
+// which 2/3 of a second is a whole number.**  Today's tick is
+// **2 000 000** units, and `TICK_SECONDS` derived from it is
+// `2000000.0 / 3000000.0`, which is **bit-identical** to the
+// `1.0 / 1.5` it replaces — verified, not assumed
+// (`tests/26_l1_the_clock.loft` § The derived second is the old one).
+// So there is ONE definition of the tick and no residue to document.
+//
+// ⚠ The wall clock hands out microseconds (`ticks()`), and
+// `clock_units_from_micros` is `* 3` — exact, no division, no rounding.
+//
+// ⚠ **The unit is not baked into this file's arithmetic**, and that is
+// deliberate: `clock_new` takes a step and the accumulator counts
+// whatever the caller counts.  A consumer at 128 Hz needs a different
+// unit (3 000 000 / 128 is not an integer) and is entitled to pick one.
+// What the library promises is the IDENTITY, not a unit.
+//
+// ── ⚠ A DOOR PER USE CASE, and none is a mode flag on another ───
+//
+//   * `clock_advance(clk, elapsed)` — a DURATION.  Banks it and answers
+//     the whole steps that are due.  A frame loop's door.
+//   * `clock_advance_capped(clk, elapsed, max)` — the same, for a
+//     driver that may be BACKGROUNDED.  Drops the excess (L4).
+//   * `clock_pump(clk, now)` — an ABSOLUTE wall reading.  The clock
+//     keeps the previous one, so a server pump owns no subtraction (L4).
+//   * `clock_step(clk, n)` — a COUNT.  Answers `n` and does not touch
+//     the bank at all.
+//   * `clock_drive(slow, fast, n)` — `n` ticks of one clock spent on a
+//     slower one (L4).
+//
+// That is `play.loft`'s two-door split one level down, and it is the
+// same rule for the same measured reason: a count and a duration look
+// like one question with a switch, and they are not.  ⚠ The doors are
+// THIN and share ONE accumulator — five entry points over five copies
+// of the arithmetic would be `plans/26` § 2's seven-sites problem
+// wearing a library's clothes.
+//
+// ── ⚠⚠ THE POLICIES ARE THE DRIVER'S, AND THE ARITHMETIC IS THIS
+//    FILE'S ────────────────────────────────────────────────────────
+//
+// L4 adds a cap, a rate and a composition — **none of which dryopea
+// uses**, and that is deliberate (`plans/26` § FLEXIBLE: *could a
+// consumer be tempted to hand-roll this?*  moros built two of the
+// three already).  What keeps them from becoming policy is that every
+// one of them is a door a caller may ignore:
+//
+//   * **The cap DROPS time, it never compresses or defers it.**  A
+//     capped frame runs `max` steps and the rest of the backlog is
+//     GONE.  ⚠ The tempting wrong version clamps the answer and leaves
+//     the excess banked — which is not a cap but a DEFERRAL, and it
+//     makes the simulation run behind the wall for ever afterwards.
+//     `tests/26_l4` § A cap that defers is the control that says so.
+//   * **The rate is a RATIONAL, so it is exact.**  `num/den` with the
+//     wall remainder carried in `[0, den)` — pause is `0/1`,
+//     half-speed `1/2`, and a rate that does not divide loses nothing.
+//     ⚠ *Free-run* is not a rate: it is the COUNT door, driven as fast
+//     as the machine allows.
+//   * **Composition is `n` ticks of one clock spent on another.**
+//     ⚠ Spelling it `n * step` by hand is the exact shape of mistake
+//     `tests/19_p1` records — and here it is exact, because the
+//     arithmetic is integer.  The door is what says so, and what keeps
+//     a consumer from writing the float version of it.
+//
+// ⚠ **Every DURATION door is scaled by the rate and the COUNT door is
+// not.**  A script asking for thirty ticks, a turn being committed and
+// a rollback re-simulation have no wall clock to slow down; a rate that
+// reached them would make a paused game unable to run its own tests.
+//
+// ── ⚠ WHAT IS DELIBERATELY NOT HERE ─────────────────────────────
+//
+// **No callback and no inversion of control.**  This never calls your
+// tick; it answers *how many*.  That is what lets one clock serve a GL
+// loop, a script runner, a server pump and a test — moros's
+// `tick.loft` keeps the same rule and its three drivers are the
+// evidence it works.
+//
+// **No backlog cap on `clock_advance`, and L4 did not add one.**  A
+// frame that delivers 20 s really does buy 30 ticks.  A cap is a
+// DRIVER's policy (`plans/26` § 3: moros's page has one and its server
+// does not), and `play_advance`'s refusal of one is what 654 gate
+// measurements rest on.  `clock_advance_capped` is a door BESIDE it,
+// never a default inside it.
+//
+// **An ALPHA, and nothing that uses it** (L5).  `clock_alpha` is how
+// far the bank is toward the next step, and it is the one number a
+// renderer needs from a fixed-step clock.  ⚠ What a consumer DOES with
+// it is a presentation decision the clock must not make — dryopea
+// measured three policies for it and ships none of them
+// (`tests/26_l5_the_alpha.loft`, `@M035`).
+//
+// **No tick COUNTER.**  `PlayState.ticks` already counts the run's
+// ticks, and a second counter beside it is two facts that can
+// disagree.  This owns the STEP and the BANK — the parts a game would
+// otherwise rebuild — and the count belongs to the game.
+
+
+// How many base units make one second.
+//
+// ⚠ **1/3 of a microsecond, and the number is derived rather than
+// picked** — see the header.  It is the coarsest unit in which
+// dryopea's 2/3-second tick is a whole number, which is what lets
+// `TICK_SECONDS` stay bit-identical to the `1.0 / 1.5` it replaced.
+pub const CLOCK_UNITS_PER_SECOND: integer = 3000000;
+
+// A fixed step and the time banked toward the next one.
+//
+// ⚠ **Both integers, and that is the whole file.**  `banked` is always
+// in `[0, step)` between calls, so there is no rounding to accumulate
+// and no epsilon to get the direction of wrong (`CLAUDE.md` § Timers
+// and epsilons: *neither direction is safe*).
+pub struct TickClock {
+    // One simulation step, in base units.  Never zero — `clock_new`
+    // refuses, because a zero step makes `clock_advance` a division by
+    // zero and "pause" is a rate of 0 rather than a step of 0 (L4).
+    step: integer,
+
+    // Base units not yet spent as whole steps.  ⚠ **The remainder is
+    // KEPT**, which is the property plan 19 P0 measured and the one no
+    // measurement in this repo would survive losing: a frame that
+    // delivers less than a step takes no step and banks all of it.
+    banked: integer,
+
+    // How fast simulated time runs against the wall, as `num / den`
+    // (L4).  Pause is `0 / 1`; half-speed `1 / 2`; triple `3 / 1`.
+    //
+    // ⚠⚠ **A zero-defaulted `den` reads as UNSCALED, and that is the
+    // third answer this plan has given to the same loft rule.**  loft
+    // defaults an omitted struct field silently ([loft#914]): a
+    // `Bank` therefore may not hold its `whole` (a defaulted 0 is a
+    // mover that never moves, `@X080`) and a `Timer` MAY hold its
+    // `total` (a defaulted 0 is an unarmed timer, `@X082`).  Here a
+    // defaulted `0 / 0` is *the behaviour you already had* —
+    // `plans/26` § The two rules under all of it — so the neutral
+    // default is not merely safe, it is the rule stated as data.
+    rate_num: integer,
+    rate_den: integer,
+
+    // Wall time not yet converted into simulated time, in `den`-ths of
+    // a base unit.  Always in `[0, den)`.
+    //
+    // ⚠ **A second accumulator, and it is a different QUESTION rather
+    // than a second copy of one.**  `banked` carries sim time toward
+    // the next step; this carries wall time toward the next sim unit.
+    // Folding them — scaling `banked` by `den` — would make
+    // `clock_banked`'s unit change with the rate, and it is a
+    // save/restore value.
+    rate_carry: integer,
+
+    // The last absolute wall reading `clock_pump` saw, and whether it
+    // has seen one at all.
+    //
+    // ⚠ **`pumped` is a flag rather than a sentinel `pump_at` of 0**,
+    // because a wall clock may legitimately read 0 — and a clock whose
+    // first pump answered `now` worth of ticks would open a server
+    // with the whole uptime as one burst.
+    pump_at: integer,
+    pumped:  boolean,
+}
+
+// A clock ticking every `step` base units.
+//
+// ⚠ **One argument, and a clock nobody configures behaves exactly as
+// dryopea's did before this file** — uncapped, unscaled, carrying its
+// remainder.  `plans/26` § The two rules under all of it: *defaults
+// mean the behaviour you already had*.
+//
+// ⚠ A step below 1 is clamped to 1 rather than refused, because the
+// alternative is a nullable clock at every call site for a case no
+// caller has: `clock_new(0)` is a mistake, not a mode.
+pub fn clock_new(step: integer) -> TickClock {
+    TickClock { step: max(step, 1), banked: 0,
+                rate_num: 1, rate_den: 1, rate_carry: 0,
+                pump_at: 0, pumped: false }
+}
+
+// Convert wall-clock microseconds — what loft's `ticks()` answers — to
+// this clock's base units.
+//
+// ⚠ **A multiplication, so it is exact.**  `main.loft` used to divide
+// microseconds by 1e6 into float seconds before the simulation saw
+// them, which threw the exactness away at the boundary and is half of
+// what plan 26 was opened for (`plans/26` § 1).
+pub fn clock_units_from_micros(us: integer) -> integer {
+    us * 3
+}
+
+// The other direction, in SECONDS.
+//
+// ⚠⚠ **The seam plan 26 L3 was going to CLOSE, and what it did instead
+// was change hands.**  Before L3 every one-shot timer in the game came
+// through here to count float seconds — the boost and its cooldown, 90
+// ticks of helper recovery, 20 s of tower rebuild, the wave lull — and
+// `tick_timer.loft` took all four into integer units.  What is left is
+// not simulation at all:
+//
+//   * **authoring** — `emit.loft` writes a captured situation as
+//     `.keys` text and a person reads it, and *seconds* is the unit a
+//     person authors in.  Exactly `bank_fraction`'s position one family
+//     over, and exactly as exact: a duration is a whole number of base
+//     units, so the round trip through `clock_units_from_seconds`
+//     recovers the integer this answered.
+//   * **presentation** — the camera's ease is `1 − e^(−k·dt)` over real
+//     frame time and is float by nature (`plans/26` § The invariant).
+//
+// ⚠ **No mover and no timer may call this.**  A mover that did would be
+// throwing away what `bank_gain` was built to keep, and a timer that did
+// would be re-introducing the direction problem `tick_timer.loft` exists
+// to delete.
+pub fn clock_seconds_from_units(units: integer) -> float {
+    (units as float) / (CLOCK_UNITS_PER_SECOND as float)
+}
+
+// Float seconds to base units, ROUNDED — the authoring door's other
+// half.
+//
+// ⚠ **Rounding rather than truncating, for `tests/26_l1`'s reason one
+// layer out**: a float second's worth of units is a hair over or under
+// its exact count, and truncating a hair-under value costs a whole unit
+// at every boundary.  The error is ~1e-10 against a step of 2 000 000.
+//
+// ⚠ Negative time answers 0 rather than a negative count — the same
+// refusal `clock_advance` makes, stated here too because the rounding
+// would otherwise turn a small negative into `-0.5` and then into 0 by
+// accident rather than by rule.
+pub fn clock_units_from_seconds(seconds: float) -> integer {
+    if seconds <= 0.0 { return 0; }
+    ((seconds * (CLOCK_UNITS_PER_SECOND as float)) + 0.5) as integer? ?? 0
+}
+
+// ─── The rate: how fast sim time runs against the wall (L4) ─────
+
+// Run simulated time at `num / den` of wall time.
+//
+// ⚠ **A RATIONAL rather than a float, and that is the whole reason it
+// needs no epsilon.**  `clock_set_rate(clk, 1, 3)` is a third of speed
+// exactly, for ever: a frame worth 100 units contributes 33 and the
+// leftover 1/3 is carried, where `elapsed * 0.3333…` drifts against a
+// rate it could not state in the first place.  Same distinction
+// `tick_bank.loft` § THE RATE IS SCALED AND THE TIME IS NOT draws one
+// family over — except that a clock's rate is authored by a KEYPRESS
+// rather than by `numbers.json`, so it is exact rather than quantised.
+//
+// ⚠ **Pause is `0 / 1`**, and it banks nothing while keeping what is
+// banked — so unpausing resumes mid-step rather than re-phasing the
+// simulation.  A step of 0 is a mistake, never a pause
+// (`clock_new`).
+//
+// ⚠ A negative `num` is clamped to 0 rather than rewinding.  Time
+// going backwards is dropped everywhere else in this file, and a rate
+// that ran the simulation in reverse would need every consumer to have
+// an inverse tick.
+//
+// ⚠ **Changing the rate DROPS the wall carry**, because the carry is
+// measured in `den`-ths of a base unit and the old `den` is gone.  It
+// is under one base unit — a third of a microsecond — and a rate
+// change is an event a player caused, not a per-frame path.
+// Example: @FIX-007
+pub fn clock_set_rate(clk: TickClock, num: integer, den: integer) {
+    clk.rate_num   = max(num, 0);
+    clk.rate_den   = max(den, 1);
+    clk.rate_carry = 0;
+}
+
+// The rate's numerator — 0 for a paused clock.
+pub fn clock_rate_num(clk: const TickClock) -> integer {
+    clk.rate_num
+}
+
+// The rate's denominator — never 0, and 1 for an unconfigured clock.
+pub fn clock_rate_den(clk: const TickClock) -> integer {
+    if clk.rate_den <= 0 { return 1; }
+    clk.rate_den
+}
+
+// Wall time in, simulated time out — exact, with the remainder carried.
+//
+// ⚠ **Private, and it is the ONE place the rate is applied.**  Every
+// duration door goes through here and the count door does not, which is
+// what makes "a rate slows the wall, never a script" one line rather
+// than a rule three call sites have to remember.
+fn clock_scaled(clk: TickClock, elapsed: integer) -> integer {
+    // ⚠ A clock built from a partial literal has `rate_den` 0 and runs
+    // UNSCALED — `plans/26` § The two rules under all of it.
+    if clk.rate_den <= 0 { return elapsed; }
+    cs_total       = clk.rate_carry + elapsed * clk.rate_num;
+    cs_sim         = (cs_total / clk.rate_den) ?? 0;
+    clk.rate_carry = cs_total - cs_sim * clk.rate_den;
+    cs_sim
+}
+
+// ─── The duration doors ─────────────────────────────────────────
+
+// Spend elapsed time, and answer the whole steps it bought.
+//
+// ⚠ **Integer division, not a subtraction loop.**  The loop is what
+// lost the tick — eleven subtractions of a repeating fraction leave a
+// remainder a hair under the twelfth — and it is also O(steps), so a
+// frame that delivered an hour walked five thousand iterations to say
+// so.  One division answers both.
+//
+// ⚠ **Time going backwards is DROPPED, not banked.**  A negative
+// elapsed is a clock that was reset or a caller subtracting in the
+// wrong order; banking it would owe the simulation negative ticks and
+// then swallow the next real frame.  Answering 0 and keeping the bank
+// is the only behaviour that cannot corrupt a run.
+//
+// ⚠ **No cap, and `clock_advance_capped` is the door that has one.**
+// A frame that delivers 20 s buys 30 ticks here, which is the property
+// dryopea's 654 gate measurements rest on.
+// Example: @FIX-001
+pub fn clock_advance(clk: TickClock, elapsed: integer) -> integer {
+    if elapsed <= 0 { return 0; }
+    clk.banked = clk.banked + clock_scaled(clk, elapsed);
+    ca_whole   = (clk.banked / clk.step) ?? 0;
+    clk.banked = clk.banked - ca_whole * clk.step;
+    ca_whole
+}
+
+// The same, for a driver that may have been backgrounded — at most
+// `max_steps`, and the excess is GONE.
+//
+// ⚠⚠ **It DROPS rather than defers, and the difference is the whole
+// door.**  `clock_advance` has already reduced the bank to the
+// sub-step remainder by the time this clamps, so the steps beyond the
+// cap are not owed: the next frame answers 1, not a burst.  The
+// tempting wrong version clamps the answer and leaves the backlog
+// banked, which runs the simulation behind the wall for ever after —
+// `tests/26_l4` § A cap that defers is that version, kept as the
+// control, and it is the only thing that makes this function's gate
+// non-trivial.
+//
+// ⚠ **And it must not compress**, which is moros's own note: *a
+// compressed catch-up is the variable-step bug wearing a bound's
+// clothes*.  Nothing here can — the step is fixed and this answers a
+// COUNT — but a driver that multiplied its tick's dt to "catch up"
+// would reintroduce exactly what `plans/22` § LOD is warned against.
+//
+// ⚠ A cap below 1 is clamped to 1, for `clock_new`'s reason: a cap of
+// zero is a simulation that can never advance, which is a mistake
+// rather than a mode.  Pause is a rate of 0.
+// Example: @FIX-004
+pub fn clock_advance_capped(clk: TickClock, elapsed: integer,
+                            max_steps: integer) -> integer {
+    cac_due = clock_advance(clk, elapsed);
+    cac_cap = max(max_steps, 1);
+    if cac_due <= cac_cap { return cac_due; }
+    cac_cap
+}
+
+// Spend the time since the last reading of an ABSOLUTE wall clock.
+//
+// ⚠ **The server pump's door: it owns the wall and the caller owns no
+// subtraction.**  `now - last` written at the call site is where a
+// driver gets the order backwards once and silently swallows a frame —
+// `clock_advance` drops negative time, so the mistake looks like a
+// stutter rather than an error.
+//
+// ⚠ **The FIRST call primes and answers none.**  A pump whose first
+// reading was treated as elapsed would open a server with its whole
+// uptime as one burst of ticks.
+//
+// ⚠ **A wall going backwards re-primes** rather than dropping the
+// reading, because an absolute clock that jumped back is the new truth;
+// dropping it would owe every future pump the difference.
+//
+// ⚠ No cap — moros's server has none and `plans/26` § 3 says why the
+// two repos are both right.  A pump that needs one wraps this in the
+// same clamp `clock_advance_capped` applies.
+// Example: @FIX-003
+pub fn clock_pump(clk: TickClock, now: integer) -> integer {
+    if !clk.pumped {
+        clk.pumped  = true;
+        clk.pump_at = now;
+        return 0;
+    }
+    if now <= clk.pump_at {
+        clk.pump_at = now;
+        return 0;
+    }
+    cp_dt       = now - clk.pump_at;
+    clk.pump_at = now;
+    clock_advance(clk, cp_dt)
+}
+
+// Ask for `n` steps, and answer how many that was.
+//
+// ⚠ **It does not touch the bank, and that is the whole point of it
+// being a separate door.**  A count is not elapsed time: a script
+// saying `tick 30` neither spends a live session's remainder nor
+// leaves one behind.  `play.loft` § TWO ways to ask made this
+// distinction one level up and measured what folding them costs.
+//
+// ⚠ It looks trivial and is not free to delete: without it a caller
+// that has a count must spell it as `n * step`, which is the exact
+// mistake `tests/19_p1` records — and which is only safe here because
+// the arithmetic is integer.  The door is what says so.
+// Example: @FIX-002
+pub fn clock_step(clk: const TickClock, n: integer) -> integer {
+    max(n, 0)
+}
+
+// The step this clock ticks on, in base units.
+pub fn clock_step_units(clk: const TickClock) -> integer {
+    clk.step
+}
+
+// Time banked toward the next step, in base units — always in
+// `[0, step)`.
+//
+// ⚠ **Readable so a run can be RESTORED**, which is the whole of what
+// a rollback consumer needs from the timing half (`plans/26` § What
+// this plan does NOT build): re-running N steps from a restored bank
+// is bit-identical because `clock_step` is exact.
+// Example: @FIX-006
+pub fn clock_banked(clk: const TickClock) -> integer {
+    clk.banked
+}
+
+// Put a clock back where it was — the other half of `clock_banked`.
+//
+// ⚠ Clamped into `[0, step)` rather than trusted: a bank at or past
+// the step is a state `clock_advance` can never leave behind, and
+// accepting one would make the next call answer a step nobody's time
+// paid for.
+pub fn clock_restore(clk: TickClock, banked: integer) {
+    if banked <= 0 { clk.banked = 0; return; }
+    clk.banked = (banked % clk.step) ?? 0;
+}
+
+// ─── The alpha: where the frame falls between two steps (L5) ────
+
+// How far the bank is toward the next step, in `[0, 1)`.
+//
+// ⚠ **The one number a renderer needs from a fixed-step clock**, and
+// the reason it is here rather than at the call site: `banked / step`
+// written by hand is a caller reaching INTO the accumulator, and a
+// caller that can read `banked` can also write it.  This is the read
+// door, and `clock_banked` (raw units, for save/restore) is the other
+// one — two questions, two answers, one field.
+//
+// ⚠ **Half-open by construction, not by a clamp.**  `clock_advance`
+// leaves `banked` in `[0, step)` and `clock_restore` refuses anything
+// else, so the division cannot reach 1.0 — which is what a caller
+// lerping between two states depends on: an alpha of exactly 1.0 would
+// draw the NEXT state one frame early, on the frame before the tick
+// that produces it.
+//
+// ⚠⚠ **What a consumer does with it is a PRESENTATION decision and this
+// file must not make it.**  The textbook use is
+// `lerp(previous_state, current_state, alpha)` — and dryopea measured it
+// against two alternatives over one drive (`tests/26_l5_the_alpha.loft`,
+// `@M035`):
+//
+//   * `lerp(prev, cur, alpha)` draws the step that has ALREADY happened,
+//     so it is **exactly one step behind, for ever** — 2.598 m here,
+//     because a step is 2/3 of a second;
+//   * `cur + alpha·(cur − prev)` is **exact to machine precision** while
+//     the velocity holds, and jumps a whole step's travel on the frame
+//     the mover starts or stops;
+//   * a first-order ease toward `cur` needs no previous state, lags
+//     between the two, and is the only one whose picture depends on the
+//     frames it was drawn on.
+//
+// ⚠ Three prices on three different axes, and which one is right is a
+// function of how long the STEP is — so a clock that picked one would be
+// wrong for every consumer whose step is a different length.  This
+// answers *where between two steps are we*; it does not answer *what
+// should be drawn there*.
+// Example: @FIX-005
+pub fn clock_alpha(clk: const TickClock) -> float {
+    if clk.step <= 0 { return 0.0; }
+    ((clk.banked as float) / (clk.step as float)) ?? 0.0
+}
+
+// ─── Composition: a slow clock driven by a fast one (L4) ────────
+
+// Spend `n` steps of `fast` on `slow`, and answer the slow steps that
+// bought.
+//
+// ⚠⚠ **The case is a strategy layer over a unit layer** — dryopea has
+// the shape twice already (the camera steps at frame rate while the sim
+// steps at 1.5 Hz, and `plans/22` § LOD contemplates ticking distant
+// things every N ticks).  ⚠ **And it is the OPPOSITE of that plan's
+// warning**: *bank progress, never multiply it* refuses to give a
+// distant enemy `N × dt` of movement in one tick.  This gives a slower
+// CLOCK the time those N ticks took, and it still ticks one step at a
+// time.
+//
+// ⚠ **Spelling it `n * step` at the call site is the shape of mistake
+// `tests/19_p1` records** — a count folded into a duration, wrong for
+// 602 of the first 1000 `n`.  Here it is exact, because both sides are
+// integers; the door exists so that the next consumer does not
+// re-derive it in seconds and find out the hard way, and
+// `tests/26_l4` § Composing by hand is exact says so out loud rather
+// than letting this comment overclaim.
+//
+// ⚠ **A slow clock driven this way LAGS its driver by less than one
+// fast step, and never leads.**  The fast clock's own bank is time
+// that has not become a tick yet, so it has not been handed on — which
+// is the correct answer and not an approximation: the composed clock is
+// exactly as far along as the ticks that actually happened.
+//
+// ⚠ **`slow`'s own rate still applies.**  A rate set on both clocks
+// multiplies, which is a composition a caller asked for; set it on the
+// one that faces the wall.
+// Example: @FIX-008
+pub fn clock_drive(slow: TickClock, fast: const TickClock, n: integer) -> integer {
+    if n <= 0 { return 0; }
+    clock_advance(slow, n * clock_step_units(fast))
+}
