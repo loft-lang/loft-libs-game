@@ -445,8 +445,24 @@ pub fn clock_pump(clk: TickClock, now: integer) -> integer {
 // that has a count must spell it as `n * step`, which is the exact
 // mistake `tests/19_p1` records — and which is only safe here because
 // the arithmetic is integer.  The door is what says so.
+//
+// ⚠⚠ **`_clk` IS UNDERSCORED BECAUSE IT IS UNREAD BY DESIGN, AND THE
+// UNDERSCORE IS LOAD-BEARING** (0.1.1).  Not reading it *is* the
+// contract — a count must not spend a live session's remainder — so
+// `never-read` is a true report of an intended fact rather than a
+// defect.  Left bare it fails the chunk's `LOFT_DENY_WARNINGS=1` CI,
+// and both tempting fixes are wrong: touching `clk` to quiet it breaks
+// the contract, and an `.allow_warnings` file switches the gate off for
+// every FUTURE warning in this package too.
+//
+// ⚠ **The parameter stays rather than the signature dropping it.**  A
+// caller holding a clock should reach for `clock_step(clk, n)` beside
+// `clock_advance(clk, elapsed)`; a bare `step(n)` would be an
+// arithmetic helper that names no case, and naming the case is the
+// entire reason this door exists.
+//
 // Example: @FIX-002
-pub fn clock_step(clk: const TickClock, n: integer) -> integer {
+pub fn clock_step(_clk: const TickClock, n: integer) -> integer {
     max(n, 0)
 }
 

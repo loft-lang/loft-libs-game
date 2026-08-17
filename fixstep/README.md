@@ -105,7 +105,7 @@ exactly 2 000 000 of them.
 
 | target | status |
 |---|---|
-| interpreter | ✅ 13/13 |
+| interpreter | ✅ 13/13, **warning-clean under `LOFT_DENY_WARNINGS=1`** |
 | `--native` | ✅ 13/13, identical results |
 | `--native-wasm` | ⚠ **not yet exercised** — `loft test --native-wasm` is accepted and silently runs the interpreter, reporting *"ran on the interpreter only"* in a banner that reads as a hint. [loft#964](https://github.com/loft-lang/loft/issues/964) |
 | `--html` | ✅ **measured, not argued** — a browser page's answers are identical to the interpreter's, line for line. See below |
@@ -131,9 +131,16 @@ holds in a browser to the bit.
 carries nothing a browser cannot take.
 
 ```sh
-loft test              # interpreter
-loft test --native     # compiled Rust
+loft test                                        # interpreter
+loft test --native                               # compiled Rust
+LOFT_DENY_WARNINGS=1 loft --interpret --tests tests   # what CI runs
 ```
+
+⚠ **The package carries no `.allow_warnings`, deliberately.**  `clock_step`
+does not read its `_clk`, which is its contract rather than an oversight, so
+the parameter is underscored to say so at the one site that means it — where
+an `.allow_warnings` file would have switched the gate off for every future
+warning as well (0.1.1).
 
 The worked-example linkage is checked by dryopea's `scripts/examples.sh`
 until this package is published and the ecosystem indexer covers it:
