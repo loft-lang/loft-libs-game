@@ -79,6 +79,7 @@ fn days_from_civil(cy: integer, cm: integer, cd: integer) -> integer {
 // ── construction / parsing ────────────────────────────────────
 
 // Epoch-ms at UTC midnight of the given calendar date.
+// Example: @TIM-001
 pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer {
     days_from_civil(fy, fmo, fd) * MS_PER_DAY
 }
@@ -112,8 +113,14 @@ fn digits_at(ds: text, start: integer, count: integer) -> integer {
 }
 
 // Parse an ISO date "YYYY-MM-DD", optionally followed by " HH:MM[:SS]"
-// or "THH:MM[:SS]" with an optional trailing "Z".  Returns null on any
-// malformed input (test with `!result`).
+// or "THH:MM[:SS]" with an optional trailing "Z".
+//
+// Null (test with `!result`) means the text is not SHAPED like a date —
+// too short, or a non-digit where a digit belongs.  It never means the
+// date is not real: out-of-range fields ROLL OVER, so "2026-13-45"
+// answers 2027-02-14 and "2026-02-30" answers 2026-03-02, both non-null.
+// To reject an impossible date, round-trip it through `format_date`.
+// Example: @TIM-002
 pub fn parse(ps: text) -> integer? {
     n = size(ps);
     if n < 10 { return null; }
@@ -164,17 +171,28 @@ pub fn weekday(wt: integer) -> integer { floor_mod(epoch_day(wt) + 3, 7) ?? 0 }
 
 // ── stepping ──────────────────────────────────────────────────
 
+// Step by whole days / weeks / seconds.  These exist because the raw
+// value is MILLISECONDS: `t + 3` is three thousandths of a second, and
+// reads at the call site like three of whatever the reader had in mind.
+// Example: @TIM-001
 pub fn add_days(adt: integer, days: integer)     -> integer { adt + days * MS_PER_DAY }
 pub fn add_weeks(awt: integer, weeks: integer)   -> integer { awt + weeks * 7 * MS_PER_DAY }
 pub fn add_seconds(ast: integer, secs: integer)  -> integer { ast + secs * MS_PER_SECOND }
 
 // ── differences ───────────────────────────────────────────────
 
-// Whole calendar days from `a` to `b` (b later → positive).
+// Calendar days from `a` to `b` (b later → positive) — a count of
+// UTC-MIDNIGHTS CROSSED, not of elapsed time, so a 26-hour span can
+// answer 2 where a 46-hour span answers 1.  This is the streak /
+// "day 3 of" question; for elapsed time use `seconds_between`.
+// Example: @TIM-003
 pub fn days_between(da: integer, db: integer) -> integer {
     epoch_day(db) - epoch_day(da)
 }
 
+// Elapsed whole seconds from `a` to `b`, TRUNCATED TOWARD ZERO — a
+// backwards span of 1.5 s answers -1, not -2.
+// Example: @TIM-003
 pub fn seconds_between(sa: integer, sb: integer) -> integer {
     (sb - sa) / MS_PER_SECOND
 }
@@ -194,7 +212,10 @@ pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer {
 }
 
 // Combine a date with an "HH:MM" or "HH:MM:SS" time string.  Mirrors
-// `datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.
+// `datetime.combine(date, time.fromisoformat(s))`.  Null on a
+// mis-SHAPED time only — as with `parse`, out-of-range fields roll over
+// ("99:99" lands four days later), so this never rejects a real clock.
+// Example: @TIM-002
 pub fn combine(cmd: integer, time_text: text) -> integer? {
     cn = size(time_text);
     if cn < 5 { return null; }
@@ -224,11 +245,13 @@ fn iso_calendar(it: integer) -> (integer, integer) {
     (iy, week)
 }
 
+// Example: @TIM-005
 pub fn iso_year(iyt: integer) -> integer {
     iyc = iso_calendar(iyt);
     iyc.0
 }
 
+// Example: @TIM-005
 pub fn iso_week(iwt: integer) -> integer {
     iwc = iso_calendar(iwt);
     iwc.1
@@ -237,11 +260,17 @@ pub fn iso_week(iwt: integer) -> integer {
 // ── local time (fixed offset, no DST) ─────────────────────────
 
 // Shift so that the field accessors / formatters yield local values.
+// The answer is an INSTANT moved by the offset, so it must never be
+// compared with, or subtracted from, an unshifted time.
+// Example: @TIM-004
 pub fn to_local(lt: integer, offset_min: integer) -> integer {
     lt + offset_min * MS_PER_MINUTE
 }
 
-// UTC-midnight key of the local calendar day containing `t`.
+// UTC-midnight key of the local calendar day containing `t` — a value
+// to GROUP by, not the instant local midnight happened (that is
+// `local_day(t, off) - off * 60000`).
+// Example: @TIM-004
 pub fn local_day(ldt: integer, offset_min: integer) -> integer {
     start_of_day(to_local(ldt, offset_min))
 }
@@ -444,6 +473,7 @@ fn OpConvIntFromDateTime(civ: DateTime) -> integer { civ.ms }
 fn OpConvDateTimeFromInt(civ: integer)  -> DateTime { DateTime { ms: civ } }
 // text -> DateTime: a TOTAL best-effort parse (bad input -> epoch); see the
 // FALLIBILITY note above for the checked path via `parse`.
+// Example: @TIM-002
 fn OpConvDateTimeFromText(civ: text) -> DateTime {
     DateTime { ms: parse(civ) ?? 0 }
 }
