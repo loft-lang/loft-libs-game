@@ -2,4 +2,16 @@ target/
 */native/target/
 *.tar.gz
 .DS_Store
+
+# loft build output.  A `.loft/` appears in EVERY directory a loft command is
+# run from, so this is one rule for the NAME rather than a row per location.
 .loft/
+
+# generated native FFI bridge (regenerated on `loft test --native`)
+*/native-auto/
+**/native-auto/
+
+# per-package dependency lock.  A library resolves its dependencies fresh in
+# CI, so a committed lock only pins the DEVELOPER's tree — and a stale one
+# makes the local gate disagree with CI's.  Regenerate with `loft update`.
+*/loft.lock
