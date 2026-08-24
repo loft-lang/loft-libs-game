@@ -1,0 +1,268 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// audio_bus — the mixer a game reaches for when one slider has to move many
+// sounds at once.
+//
+// ── ⚠⚠ THE INVARIANT ────────────────────────────────────────────────
+//
+// > **A voice is heard at its own level TIMES the gain of every bus above it,
+// > and a duck that is lifted restores the level EXACTLY.**
+//
+// Both halves are the whole package. The first says why a mixer exists at all:
+// `graphics::audio_set_volume` moves one sink, so "turn the music down" without a
+// bus means walking a list a game had to keep itself, and "turn everything down"
+// means walking all of them. The second says why ducking is not a multiplication:
+// a game ducks the music under speech a thousand times an hour, and restoring by
+// dividing the gain back out accumulates a drift that ends with the music quietly
+// several percent wrong and nothing in the code saying where it went.
+//
+// So a duck REMEMBERS the level it replaced and puts that number back. It cannot
+// drift, because nothing is computed on the way home.
+//
+// ── WHAT THIS IS NOT ────────────────────────────────────────────────
+//
+// Not a DSP graph. There is no filtering, no send/return, no compressor — a bus
+// here is a number that multiplies, arranged in a tree. That is what a 2-D game
+// wants from a mixer, and everything past it belongs to a sound engine.
+//
+// Not an owner of playback either: `graphics` plays the sounds and this decides
+// how loud. A sink a caller played itself is welcome — `attach` puts an existing
+// handle on a bus — which is also what lets every rule here be tested on a
+// machine with no audio device at all.
+use graphics;
+
+/// One level in the tree: a name, a level, and what it hangs under.
+pub struct Bus {
+  bs_name: text,
+  /// The bus above this one. `""` is the top — the level everything passes
+  /// through, so a master volume is `set_volume(m, MASTER, x)`.
+  bs_parent: text = "",
+  /// This bus's own level, 0.0 to 1.0.
+  bs_volume: float = 1.0,
+  /// What `bs_volume` was before the current duck, or `-1.0` when nothing is
+  /// ducking it. The duck's cure is REMEMBERING, not dividing back out.
+  bs_before: float = -1.0,
+}
+
+/// One playing sound, and the bus it answers to.
+pub struct Voice {
+  /// The handle `graphics::audio_play` answered — the key, because it is the
+  /// one thing a caller already holds.
+  vc_sink: integer,
+  vc_bus: text = "",
+  /// The sound's OWN level, before any bus touches it. Kept, because the level
+  /// a sink is set to is derived and a derived value cannot be un-multiplied.
+  vc_volume: float = 1.0,
+}
+
+/// The mixer: the bus tree, and every voice currently on it.
+pub struct Mixer {
+  buses: hash<Bus[bs_name]>,
+  voices: hash<Voice[vc_sink]>,
+}
+
+/// The name of the bus everything hangs under.
+pub const MASTER = "master";
+
+/// How far up a parent chain to walk before deciding it does not end.
+///
+/// A cycle is a caller's mistake (`add(m, "a", "b")` plus `add(m, "b", "a")`),
+/// and the answer to one has to be a number rather than a hang. Ten is deeper
+/// than any real mixer: master, music, ambience, sfx, ui is five.
+pub const MAX_DEPTH = 10;
+
+/// A mixer with nothing on it but the master bus.
+pub fn mixer() -> Mixer {
+  mx = Mixer { buses: [], voices: [] };
+  mx.buses += [Bus { bs_name: MASTER, bs_parent: "", bs_volume: 1.0, bs_before: -1.0 }];
+  mx
+}
+
+/// Add a bus under `parent`, at `volume`.
+///
+/// Answers false — changing nothing — when the name is already taken, when the
+/// parent does not exist, or when the name is empty. A mixer that silently
+/// accepts a second `"music"` has two of them and obeys neither.
+pub fn add(m: Mixer, name: text, parent: text = MASTER, volume: float = 1.0) -> boolean {
+  if name == "" { return false }
+  if m.buses[name] != null { return false }
+  if parent != "" && m.buses[parent] == null { return false }
+  m.buses += [Bus { bs_name: name, bs_parent: parent, bs_volume: volume, bs_before: -1.0 }];
+  true
+}
+
+/// The gain a sound on this bus is multiplied by: the bus's own level times
+/// every level above it.
+///
+/// A name no bus has answers 0.0 rather than 1.0. Silence is the answer a caller
+/// can hear; a missing bus that plays at full volume is one they cannot.
+pub fn gain(m: const Mixer, name: text) -> float {
+  gn_at = name;
+  gn_g = 1.0;
+  for _ in 0..MAX_DEPTH {
+    if gn_at == "" { return gn_g }
+    gn_b = m.buses[gn_at];
+    if gn_b == null { return 0.0 }
+    gn_g *= gn_b.bs_volume;
+    gn_at = gn_b.bs_parent;
+  }
+  // A parent chain that will not end. Answer silence rather than looping: the
+  // caller built a cycle, and a mixer that hangs says less about it than a bus
+  // that goes quiet.
+  0.0
+}
+
+/// What a voice's sink should be set to: the sound's own level times its bus.
+pub fn level(m: const Mixer, sink: integer) -> float {
+  lv_v = m.voices[sink];
+  if lv_v == null { return 0.0 }
+  lv_v.vc_volume * gain(m, lv_v.vc_bus)
+}
+
+/// Put an already-playing sink on a bus at its own level.
+///
+/// The seam this package is built around: `play` is `graphics::audio_play`
+/// followed by this, and a caller who plays a sound their own way — a procedural
+/// effect, a clip started before the mixer existed — gets the same bus.
+pub fn attach(m: Mixer, sink: integer, bus: text, volume: float = 1.0) -> boolean {
+  if sink < 0 || m.buses[bus] == null { return false }
+  if m.voices[sink] != null { m.voices[sink] = null; }
+  m.voices += [Voice { vc_sink: sink, vc_bus: bus, vc_volume: volume }];
+  graphics::audio_set_volume(sink, level(m, sink));
+  true
+}
+
+/// Forget a sink without stopping it — it keeps whatever level it has.
+pub fn detach(m: Mixer, sink: integer) {
+  if m.voices[sink] != null { m.voices[sink] = null; }
+}
+
+/// Play a clip on a bus. The arguments past `volume` are `graphics::audio_play`'s
+/// and mean exactly what they mean there.
+///
+/// Answers the sink handle, or -1 when the sound did not start — in which case
+/// nothing is attached, so a mixer never carries a voice that is not playing.
+pub fn play(m: Mixer, bus: text, clip: integer, volume: float = 1.0,
+            looping: boolean = false, pan: float = 0.0, start: float = 0.0) -> integer {
+  if m.buses[bus] == null { return -1 }
+  py_sink = graphics::audio_play(clip, volume * gain(m, bus), looping, pan, start);
+  if py_sink < 0 { return -1 }
+  _ = attach(m, py_sink, bus, volume);
+  py_sink
+}
+
+/// Re-apply every voice's level — after a bus moved, or after a whole tree did.
+fn reapply(m: Mixer) {
+  for v in m.voices {
+    graphics::audio_set_volume(v.vc_sink, v.vc_volume * gain(m, v.vc_bus));
+  }
+}
+
+/// Set a bus's level, and move every sound under it.
+///
+/// Answers false for a bus that does not exist. A level below 0 is clamped: a
+/// negative gain inverts a waveform rather than quietening it, which is not what
+/// any caller of a volume control means.
+pub fn set_volume(m: Mixer, name: text, volume: float) -> boolean {
+  sv_b = m.buses[name];
+  if sv_b == null { return false }
+  sv_b.bs_volume = if volume < 0.0 { 0.0 } else { volume };
+  reapply(m);
+  true
+}
+
+/// This bus's own level — not counting the buses above it.
+pub fn volume(m: const Mixer, name: text) -> float {
+  vo_b = m.buses[name];
+  if vo_b == null { return 0.0 }
+  vo_b.bs_volume
+}
+
+/// Duck a bus to `to` — speech over music, a menu over a battle.
+///
+/// The level it replaces is REMEMBERED, so `unduck` restores it exactly. Ducking
+/// an already-ducked bus moves it again and keeps the ORIGINAL level to come home
+/// to: a duck inside a duck must not make the first one's restore a guess.
+///
+/// Answers false for a bus that does not exist.
+pub fn duck(m: Mixer, name: text, to: float) -> boolean {
+  dk_b = m.buses[name];
+  if dk_b == null { return false }
+  if dk_b.bs_before < 0.0 { dk_b.bs_before = dk_b.bs_volume; }
+  dk_b.bs_volume = if to < 0.0 { 0.0 } else { to };
+  reapply(m);
+  true
+}
+
+/// Lift a duck, putting back the exact level it replaced.
+///
+/// Answers false for a bus that does not exist or is not ducked — the second is
+/// worth an answer rather than a shrug, because an unduck that finds nothing to
+/// lift means a duck and its lift have come apart somewhere.
+pub fn unduck(m: Mixer, name: text) -> boolean {
+  ud_b = m.buses[name];
+  if ud_b == null { return false }
+  if ud_b.bs_before < 0.0 { return false }
+  ud_b.bs_volume = ud_b.bs_before;
+  ud_b.bs_before = -1.0;
+  reapply(m);
+  true
+}
+
+/// Is this bus ducked right now?
+pub fn ducked(m: const Mixer, name: text) -> boolean {
+  dd_b = m.buses[name];
+  if dd_b == null { return false }
+  dd_b.bs_before >= 0.0
+}
+
+/// Move one playing sound across the stereo field. The mixer keeps the voice
+/// list, so this is where a caller already is.
+pub fn pan(m: const Mixer, sink: integer, position: float) {
+  if m.voices[sink] == null { return }
+  graphics::audio_set_pan(sink, position);
+}
+
+/// Stop one sound and forget it.
+pub fn stop(m: Mixer, sink: integer) {
+  if m.voices[sink] == null { return }
+  graphics::audio_stop(sink);
+  m.voices[sink] = null;
+}
+
+/// Stop every sound on a bus — and on the buses under it.
+///
+/// Answers how many it stopped, because "the scene is over, silence its sounds"
+/// is a claim a caller may want to check rather than assume.
+pub fn stop_bus(m: Mixer, name: text) -> integer {
+  sb_gone: vector<integer> = [];
+  for v in m.voices if under(m, v.vc_bus, name) { sb_gone += [v.vc_sink]; }
+  for s in sb_gone {
+    graphics::audio_stop(s);
+    m.voices[s] = null;
+  }
+  len(sb_gone)
+}
+
+/// Stop everything, on every bus.
+pub fn stop_all(m: Mixer) -> integer {
+  sa_gone: vector<integer> = [];
+  for v in m.voices { sa_gone += [v.vc_sink]; }
+  graphics::audio_stop_all();
+  for s in sa_gone { m.voices[s] = null; }
+  len(sa_gone)
+}
+
+/// Is `name` at or below `ancestor` in the tree?
+pub fn under(m: const Mixer, name: text, ancestor: text) -> boolean {
+  un_at = name;
+  for _ in 0..MAX_DEPTH {
+    if un_at == ancestor { return true }
+    if un_at == "" { return false }
+    un_b = m.buses[un_at];
+    if un_b == null { return false }
+    un_at = un_b.bs_parent;
+  }
+  false
+}
