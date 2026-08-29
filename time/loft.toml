@@ -1,6 +1,6 @@
 [package]
 name    = "time"
-version = "0.3.0"
+version = "0.3.1"
 loft    = ">=2026.7.2"
 
 api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
