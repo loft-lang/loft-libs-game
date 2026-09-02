@@ -257,6 +257,7 @@ pub fn get_axis(self: const InputState, axis: text) -> float {
 // Mouse position — pixels from the top-left of the window
 // (matches `graphics::gl_mouse_x` / `gl_mouse_y`).
 pub fn mouse_x(self: const InputState) -> float { self.is_mouse_x }
+// The pointer's y this frame, the companion of `mouse_x`.
 pub fn mouse_y(self: const InputState) -> float { self.is_mouse_y }
 
 // True if the given mouse button (`MB_LEFT` / `MB_RIGHT` / `MB_MIDDLE`)

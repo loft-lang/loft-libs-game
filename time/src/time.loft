@@ -28,6 +28,31 @@
 //                    format_datetime, format_iso, weekday_name,
 //                    month_name
 //   Parse failure returns null (i64::MIN) — test with `!result`.
+//
+// ── Using it ─────────────────────────────────────────────────────────────────
+//
+// There are TWO layers over the same milliseconds, and most code wants the typed one:
+//
+//   d    = date(2026, 9, 2);        // DateTime
+//   e    = d + days(10);            // DateTime — arithmetic reads as arithmetic
+//   span = e - d;                   // Duration
+//
+//   span.total_days()               // 10
+//   e > d                           // true — the comparisons are defined
+//   e.weekday_name()                // "Sat"
+//
+// `DateTime` and `Duration` carry the operators (`+ - < <= > >= == !=`), so a span is a
+// value you can add, scale and compare rather than an integer you must remember the unit
+// of.  Build durations with `milliseconds` / `seconds` / `minutes` / `hours` / `days` /
+// `weeks`, and read them back with the matching `total_*`.
+//
+// The PLAIN-INTEGER layer is the same calendar over a bare `integer` of milliseconds since
+// the epoch — what `now()` returns and what you store or send:
+//
+//   t = now();  y = year(t);  s = format_iso(t);
+//
+// Reach for it at the edges (storage, wire, interop) and for the typed layer in between;
+// `to_millis` and `from_millis` cross over.
 
 const MS_PER_DAY    = 86400000;
 const MS_PER_HOUR   = 3600000;
@@ -90,6 +115,8 @@ pub fn from_millis(ms: integer) -> integer { ms }
 // Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds
 // (`.timestamp()`), while loft times are milliseconds — convert at the edge.
 pub fn from_unix_seconds(secs: integer) -> integer { secs * MS_PER_SECOND }
+// Whole seconds since the epoch — what a system call or a wire format usually wants,
+// where this library works in milliseconds.
 pub fn to_unix_seconds(uts: integer) -> integer { floor_div(uts, MS_PER_SECOND) }
 
 fn digit_value(dc: character) -> integer {
@@ -145,16 +172,19 @@ pub fn parse(ps: text) -> integer? {
 
 // ── field accessors ───────────────────────────────────────────
 
+// The calendar year, UTC.  Proleptic Gregorian, so it is defined before 1970 too.
 pub fn year(yt: integer) -> integer {
     yc = civil_from_days(epoch_day(yt));
     yc.0
 }
 
+// The month, 1..12 — one-based, as a calendar reads.
 pub fn month(mt: integer) -> integer {
     mc = civil_from_days(epoch_day(mt));
     mc.1
 }
 
+// The day of the month, 1..31.
 pub fn day(dt: integer) -> integer {
     dc = civil_from_days(epoch_day(dt));
     dc.2
@@ -162,8 +192,11 @@ pub fn day(dt: integer) -> integer {
 
 fn ms_of_day(mt2: integer) -> integer { floor_mod(mt2, MS_PER_DAY) ?? 0 }
 
+// The hour of the day, 0..23, in UTC.
 pub fn hour(ht: integer)   -> integer { ms_of_day(ht) / MS_PER_HOUR }
+// The minute of the hour, 0..59.
 pub fn minute(mit: integer) -> integer { (ms_of_day(mit) / MS_PER_MINUTE) % 60 }
+// The second of the minute, 0..59.
 pub fn second(st: integer)  -> integer { (ms_of_day(st) / MS_PER_SECOND) % 60 }
 
 // 0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).
@@ -176,7 +209,10 @@ pub fn weekday(wt: integer) -> integer { floor_mod(epoch_day(wt) + 3, 7) ?? 0 }
 // reads at the call site like three of whatever the reader had in mind.
 // Example: @TIM-001
 pub fn add_days(adt: integer, days: integer)     -> integer { adt + days * MS_PER_DAY }
+// Move by whole weeks.  Calendar-safe like `add_days`: no hour drifts, because there is
+// no daylight saving in this model.
 pub fn add_weeks(awt: integer, weeks: integer)   -> integer { awt + weeks * 7 * MS_PER_DAY }
+// Move by whole seconds.
 pub fn add_seconds(ast: integer, secs: integer)  -> integer { ast + secs * MS_PER_SECOND }
 
 // ── differences ───────────────────────────────────────────────
@@ -199,6 +235,8 @@ pub fn seconds_between(sa: integer, sb: integer) -> integer {
 
 // ── boundaries ────────────────────────────────────────────────
 
+// Midnight UTC at the start of this day — the anchor for bucketing events by day.
+// For a local day, offset first with `to_local`.
 pub fn start_of_day(sdt: integer) -> integer { epoch_day(sdt) * MS_PER_DAY }
 
 // Monday 00:00 UTC of the week containing `t`.
@@ -282,6 +320,7 @@ pub fn today(offset_min: integer) -> integer {
 
 // ── formatting ────────────────────────────────────────────────
 
+// The date as YYYY-MM-DD.
 pub fn format_date(fdt: integer) -> text {
     fc = civil_from_days(epoch_day(fdt));
     fyy = fc.0;
@@ -290,12 +329,14 @@ pub fn format_date(fdt: integer) -> text {
     "{fyy:04}-{fmm:02}-{fdd:02}"
 }
 
+// The time as HH:MM.
 pub fn format_time(ftt: integer) -> text {
     fth = hour(ftt);
     ftm = minute(ftt);
     "{fth:02}:{ftm:02}"
 }
 
+// The time as HH:MM:SS, when the seconds matter.
 pub fn format_seconds(fst: integer) -> text {
     fsh = hour(fst);
     fsm = minute(fst);
@@ -303,18 +344,21 @@ pub fn format_seconds(fst: integer) -> text {
     "{fsh:02}:{fsm:02}:{fss:02}"
 }
 
+// Date and time together, for a log line or a label.
 pub fn format_datetime(fdtt: integer) -> text {
     fdd2 = format_date(fdtt);
     ftt2 = format_time(fdtt);
     "{fdd2} {ftt2}"
 }
 
+// Full ISO-8601 in UTC — the spelling to store or send, and the one `parse` reads back.
 pub fn format_iso(fit: integer) -> text {
     fid = format_date(fit);
     fis = format_seconds(fit);
     "{fid}T{fis}Z"
 }
 
+// The weekday's short English name ("Mon" … "Sun"), for display only.
 pub fn weekday_name(wnt: integer) -> text {
     match weekday(wnt) {
         0 => "Mon",
@@ -327,6 +371,7 @@ pub fn weekday_name(wnt: integer) -> text {
     }
 }
 
+// The month's short English name ("Jan" … "Dec"), for display only.
 pub fn month_name(mnt: integer) -> text {
     match month(mnt) {
         1  => "Jan",
@@ -374,66 +419,112 @@ pub value struct DateTime { ms: integer }
 pub value struct Duration { ms: integer }
 
 // ── DateTime construction ──
+// A DateTime at midnight UTC on this calendar date — the usual way into the typed layer.
 pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime {
     DateTime { ms: from_ymd(dcy, dcmo, dcd) }
 }
+// A DateTime at an exact calendar date and time of day, UTC.
 pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,
                 tch: integer, tcmi: integer, tcs: integer) -> DateTime {
     DateTime { ms: at_time(from_ymd(tcy, tcmo, tcd), tch, tcmi, tcs) }
 }
 
 // ── Duration construction ──
+// A Duration of this many milliseconds.
 pub fn milliseconds(nms: integer) -> Duration { Duration { ms: nms } }
+// A Duration of this many seconds.
 pub fn seconds(nsec: integer)     -> Duration { Duration { ms: nsec * MS_PER_SECOND } }
+// A Duration of this many minutes.
 pub fn minutes(nmin: integer)     -> Duration { Duration { ms: nmin * MS_PER_MINUTE } }
+// A Duration of this many hours.
 pub fn hours(nhr: integer)        -> Duration { Duration { ms: nhr * MS_PER_HOUR } }
+// A Duration of this many days.  Add it to a DateTime rather than doing the arithmetic
+// yourself, so the unit is in the code instead of in your head.
 pub fn days(nday: integer)        -> Duration { Duration { ms: nday * MS_PER_DAY } }
+// A Duration of this many weeks.
 pub fn weeks(nwk: integer)        -> Duration { Duration { ms: nwk * 7 * MS_PER_DAY } }
 
 // ── DateTime field accessors (methods; delegate to the integer API above) ──
+// This value's year.
 pub fn year(self: DateTime)         -> integer { year(self.ms) }
+// This value's month.
 pub fn month(self: DateTime)        -> integer { month(self.ms) }
+// This value's day.
 pub fn day(self: DateTime)          -> integer { day(self.ms) }
+// This DateTime's hour, the method form of the free function above.
 pub fn hour(self: DateTime)         -> integer { hour(self.ms) }
+// This DateTime's minute, the method form of the free function above.
 pub fn minute(self: DateTime)       -> integer { minute(self.ms) }
+// This DateTime's second, the method form of the free function above.
 pub fn second(self: DateTime)       -> integer { second(self.ms) }
+// This value's weekday.
 pub fn weekday(self: DateTime)      -> integer { weekday(self.ms) }
+// This value's iso year.
 pub fn iso_year(self: DateTime)     -> integer { iso_year(self.ms) }
+// This value's iso week.
 pub fn iso_week(self: DateTime)     -> integer { iso_week(self.ms) }
+// This DateTime's weekday name, the method form of the free function above.
 pub fn weekday_name(self: DateTime) -> text    { weekday_name(self.ms) }
+// This DateTime's month name, the method form of the free function above.
 pub fn month_name(self: DateTime)   -> text    { month_name(self.ms) }
+// This DateTime as milliseconds since the epoch — the way OUT of the typed layer, for
+// storage, a wire format, or the plain-integer routines above.
 pub fn to_millis(self: DateTime)    -> integer { self.ms }
 
 // ── Duration accessors ──
+// The span in whole milliseconds — its exact value.
 pub fn total_millis(self: Duration)  -> integer { self.ms }
+// The span in whole seconds, truncated toward zero.
 pub fn total_seconds(self: Duration) -> integer { self.ms / MS_PER_SECOND }
+// The span in whole minutes, truncated toward zero.
 pub fn total_minutes(self: Duration) -> integer { self.ms / MS_PER_MINUTE }
+// The span in whole hours, truncated toward zero.
 pub fn total_hours(self: Duration)   -> integer { self.ms / MS_PER_HOUR }
+// The span in whole days, truncated toward zero.
 pub fn total_days(self: Duration)    -> integer { self.ms / MS_PER_DAY }
 
 // ── DateTime operators (comparison + typed arithmetic) ──
+// Is this DateTime earlier?  Defined so dates compare with `<` like numbers.
 pub fn OpLt(self: DateTime, other: DateTime) -> boolean { self.ms < other.ms }
+// Earlier or the same instant.
 pub fn OpLe(self: DateTime, other: DateTime) -> boolean { self.ms <= other.ms }
+// Later.
 pub fn OpGt(self: DateTime, other: DateTime) -> boolean { self.ms > other.ms }
+// Later or the same instant.
 pub fn OpGe(self: DateTime, other: DateTime) -> boolean { self.ms >= other.ms }
+// The same instant — to the millisecond, not to the day.
 pub fn OpEq(self: DateTime, other: DateTime) -> boolean { self.ms == other.ms }
+// A different instant.
 pub fn OpNe(self: DateTime, other: DateTime) -> boolean { self.ms != other.ms }
+// DateTime - DateTime is the Duration BETWEEN them, which is why a span never has to be
+// spelled as a bare integer.
 pub fn OpMin(self: DateTime, other: DateTime) -> Duration { Duration { ms: self.ms - other.ms } }
+// DateTime + Duration moves forward by the span; subtract by adding `negate(span)`.
 pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime { DateTime { ms: self.ms + span.ms } }
 // `-` on a DateTime is the difference `dt - dt` (above); operators key on the
 // receiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).
 pub fn minus(self: DateTime, span: Duration) -> DateTime { DateTime { ms: self.ms - span.ms } }
+// The same span, backwards.  Subtracting a Duration is adding its negation.
 pub fn negate(self: Duration) -> Duration { Duration { ms: 0 - self.ms } }
 
 // ── Duration operators ──
+// Two spans add.
 pub fn OpAdd(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms + other.ms } }
+// One span less another.
 pub fn OpMin(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms - other.ms } }
+// A span scaled by a whole number — `minutes(5) * 3` is fifteen minutes.
 pub fn OpMul(self: Duration, factor: integer) -> Duration { Duration { ms: self.ms * factor } }
+// Is this span shorter?
 pub fn OpLt(self: Duration, other: Duration) -> boolean { self.ms < other.ms }
+// Shorter or equal.
 pub fn OpLe(self: Duration, other: Duration) -> boolean { self.ms <= other.ms }
+// Longer.
 pub fn OpGt(self: Duration, other: Duration) -> boolean { self.ms > other.ms }
+// Longer or equal.
 pub fn OpGe(self: Duration, other: Duration) -> boolean { self.ms >= other.ms }
+// The same length.
 pub fn OpEq(self: Duration, other: Duration) -> boolean { self.ms == other.ms }
+// A different length.
 pub fn OpNe(self: Duration, other: Duration) -> boolean { self.ms != other.ms }
 
 // ── custom formatting (the per-type to_text hook) ──
