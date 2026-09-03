@@ -1,11 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// ⚠️  PARKED — blocked on [@P391](../../../doc/claude/PROBLEMS.md#open-issues--quick-reference)
-// (cross-package struct constructor lands in CONST_STORE).  Gated by
-// `LIB_PKGS_SKIP` in tests/wrap.rs + tests/native.rs + `LIB_PKGS_NODE_SKIP`
-// in tests/html_wasm.rs.  Un-skip once @P391 is fixed.
-//
 // Smoke test for the input library.  Drives state via
 // `input_tick_from_state` (no GL context needed); validates:
 //   - construction from bindings

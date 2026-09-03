@@ -1,0 +1,248 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// One test per non-obvious contract, and each one is that contract's
+// worked EXAMPLE.
+//
+// ⚠⚠ **The pair is the deliverable.**  A snippet in a doc comment rots
+// silently — nothing compiles it, so it goes stale at the first
+// signature change and the reader finds out.  A test nobody links to is
+// correct and invisible.  So every function below carries an
+// `// Example: @INP-0NN` line pointing here, and every tag here is
+// reachable from the functions it demonstrates.
+//
+// ⚠ These are examples FIRST and assertions second: each is written the
+// way a game's frame loop would actually write it.  `01-basics` already
+// pins that each query answers correctly; what these pin is the shape of
+// a CORRECT CALL.
+//
+// Why this library owes them: **an edge is a difference between two
+// ticks, and a name is a bare `text`.**  Nothing in a signature says how
+// often to tick, that a misspelt action is silently never pressed, that
+// a combined button mask means "either", or that a rebind inherits the
+// keys already held.  Every one of those is a well-typed call answering
+// the same `false` / `0.0` a correct one answers.
+//
+// Every example drives the state through `input_tick_from_state`, so
+// they run headless — no GL context, and the same edge-detection code
+// path a polled game takes.
+use input;
+
+// Key codes as `graphics` numbers them (`KEY_A` = 97, `KEY_SPACE` = 32,
+// `KEY_LEFT` = 130, `KEY_RIGHT` = 131).  A game reads them from
+// `graphics`; the tests restate them so they need no GL build.
+KEY_SPACE = 32;
+KEY_LEFT  = 130;
+KEY_RIGHT = 131;
+KEY_A     = 97;
+KEY_B     = 98;
+
+// One frame's worth of keyboard, as `input_tick_from_state` wants it:
+// a flag per key code, index = code.
+fn keys_down(kd_codes: vector<integer>) -> vector<boolean> {
+  kd_v: vector<boolean> = [];
+  for _ in 0..256 { kd_v += [false]; }
+  for kd_k in kd_codes { if kd_k >= 0 && kd_k < 256 { kd_v[kd_k] = true; } }
+  kd_v
+}
+
+// A small platformer's bindings: two actions and one axis.
+fn platformer_state() -> input::InputState {
+  ps_b = input::Bindings{
+    bnd_actions: [
+      input::ActionBinding{ab_name: "jump", ab_keys: [KEY_SPACE]},
+      input::ActionBinding{ab_name: "use",  ab_keys: [KEY_A]}
+    ],
+    bnd_axes: [
+      input::AxisBinding{ax_name: "horizontal", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT}
+    ]
+  };
+  input::input_new(ps_b)
+}
+
+// The frame loop, and the one rule it has to obey.
+//
+// ⚠⚠ **Tick exactly once per frame.**  An edge is the difference between
+// the tick's table and the previous tick's, so the TICK is what consumes
+// it — not the query.  Ask as many times as you like; tick twice in one
+// frame and the press is gone, with nothing anywhere reporting it.
+// @INP-001 — the edge lives between two ticks, so tick once per frame
+fn test_a_frame_loop_ticks_once() {
+  fl_s = platformer_state();
+
+  // Frame 1 — the player is holding jump as the level starts.  Both
+  // tables begin all-false, so the first tick counts as a transition:
+  // an already-held key fires its edge on frame one, by design.
+  fl_s.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(fl_s.is_action_just_pressed("jump"), "frame 1: the edge fires");
+
+  // ⚠ Queries are free and repeatable — two systems can both ask.
+  assert(fl_s.is_action_just_pressed("jump"), "a second reader lost the edge");
+  assert(fl_s.is_action_pressed("jump"), "held, as well as risen");
+
+  // Frame 2 — still held: pressed, but no edge.  This is what makes
+  // `just_pressed` the right query for "fire once per press".
+  fl_s.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(fl_s.is_action_pressed("jump"), "frame 2: still held");
+  assert(!fl_s.is_action_just_pressed("jump"), "frame 2: the edge is spent");
+
+  // Frame 3 — released: the falling edge, once.
+  fl_s.input_tick_from_state(keys_down([]), 0.0, 0.0, 0, 0);
+  assert(fl_s.is_action_just_released("jump"), "frame 3: the release fires");
+  assert(!fl_s.is_action_pressed("jump"), "frame 3: no longer held");
+
+  // ⚠ The failure this door exists to prevent: a second tick inside one
+  // frame — a menu that polls, or a fixed-step loop that ticks input
+  // alongside every simulation step — hands the press to nobody.
+  fl_lost = platformer_state();
+  fl_lost.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  fl_lost.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(!fl_lost.is_action_just_pressed("jump"),
+         "the second tick in one frame swallowed the press");
+  // The wheel is a per-tick delta and is zeroed the same way.
+  fl_lost.input_tick_from_state(keys_down([]), 0.0, 0.0, 0, 4);
+  assert(fl_lost.mouse_wheel() == 4, "wheel this tick");
+  fl_lost.input_tick_from_state(keys_down([]), 0.0, 0.0, 0, 0);
+  assert(fl_lost.mouse_wheel() == 0, "the wheel does not accumulate across ticks");
+}
+
+// Querying an action and an axis — and what a typo does.
+//
+// ⚠⚠ **A name is a bare `text` that is never declared anywhere.**  An
+// unknown action answers `false`, which is exactly what an action that
+// is simply not pressed answers; an unknown axis answers `0.0`, which is
+// exactly what a centred one answers.  So a misspelt binding is not an
+// error, it is a control that never works, for the life of the build.
+// @INP-002 — every failure answers what success answers
+fn test_a_misspelt_name_is_silent() {
+  sn_s = platformer_state();
+  sn_s.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+
+  assert(sn_s.is_action_pressed("jump"), "the bound name works");
+
+  // ⚠ These two lines are indistinguishable at the call site:
+  assert(!sn_s.is_action_pressed("jmup"), "a typo answers false");
+  assert(!sn_s.is_action_pressed("use"), "an unpressed action answers false");
+  assert(!sn_s.is_action_just_pressed("jmup"), "and so does its edge");
+
+  // ⚠ Same for an axis, where `0.0` carries three different meanings:
+  assert(sn_s.get_axis("horizonal") == 0.0, "unknown axis reads centred");
+  assert(sn_s.get_axis("horizontal") == 0.0, "neither key down reads centred");
+  sn_s.input_tick_from_state(keys_down([KEY_LEFT, KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  assert(sn_s.get_axis("horizontal") == 0.0, "both keys down CANCEL to centred");
+
+  // ...so `get_axis(a) == 0.0` can never be read as "the player is not
+  // steering".  The values that do mean something are the poles:
+  sn_s.input_tick_from_state(keys_down([KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  assert(sn_s.get_axis("horizontal") == 1.0, "ax_pos is +1");
+  sn_s.input_tick_from_state(keys_down([KEY_LEFT]), 0.0, 0.0, 0, 0);
+  assert(sn_s.get_axis("horizontal") == -1.0, "ax_neg is -1");
+
+  // The check that does hold, if a typo must be caught: ask the bindings.
+  assert(has_action(sn_s, "jump"), "jump is bound");
+  assert(!has_action(sn_s, "jmup"), "jmup is not");
+}
+
+// The lookup the example above recommends when a name comes from config or a
+// remap screen: the binding list is the only place a name exists.
+fn has_action(ha_s: const input::InputState, ha_name: text) -> boolean {
+  for ha_ab in ha_s.is_bindings.bnd_actions {
+    if ha_ab.ab_name == ha_name { return true; }
+  }
+  false
+}
+
+// Reading mouse buttons.
+//
+// ⚠⚠ **A button argument is a MASK and the test is `& != 0`, so passing
+// two bits asks "either", not "both".**  `MB_LEFT | MB_RIGHT` is a
+// well-typed integer that reads true while only the left is down — and
+// its `just_pressed` then MISSES the right button entirely, because the
+// mask was already non-zero.  Pass one constant per call.
+// @INP-003 — a combined button mask means "either", and hides an edge
+fn test_one_button_constant_per_call() {
+  mb_s = platformer_state();
+
+  // Frame 1 — the left button goes down.
+  mb_s.input_tick_from_state(keys_down([]), 12.0, 34.0, input::MB_LEFT, 0);
+  assert(mb_s.mouse_button_down(input::MB_LEFT), "left is down");
+  assert(!mb_s.mouse_button_down(input::MB_RIGHT), "right is not");
+  assert(mb_s.mouse_button_just_pressed(input::MB_LEFT), "left's edge");
+  assert(mb_s.mouse_x() == 12.0 && mb_s.mouse_y() == 34.0, "pointer, top-left origin");
+
+  // ⚠ Only the left is down, and the combined mask says yes:
+  assert(mb_s.mouse_button_down(input::MB_LEFT | input::MB_RIGHT),
+         "a combined mask answers `either`, not `both`");
+
+  // Frame 2 — the right joins while the left stays down.
+  mb_s.input_tick_from_state(keys_down([]), 12.0, 34.0,
+                             input::MB_LEFT | input::MB_RIGHT, 0);
+  assert(mb_s.mouse_button_just_pressed(input::MB_RIGHT),
+         "asked per button, the new press is seen");
+  // ⚠ ...and asked as a mask, it is not: the mask was already non-zero
+  // last tick, so `now && !prev` is false and the click is dropped.
+  assert(!mb_s.mouse_button_just_pressed(input::MB_LEFT | input::MB_RIGHT),
+         "the combined mask hid the right-button press");
+
+  // Frame 3 — the left lifts, the right stays.
+  mb_s.input_tick_from_state(keys_down([]), 12.0, 34.0, input::MB_RIGHT, 0);
+  assert(mb_s.mouse_button_just_released(input::MB_LEFT), "left's release");
+  assert(mb_s.mouse_button_down(input::MB_RIGHT), "right still held");
+  assert(!mb_s.mouse_button_just_released(input::MB_RIGHT), "right did not release");
+}
+
+// The settings screen: the player remaps a control mid-game.
+//
+// ⚠⚠ **`input_set_bindings` swaps the names, never the key tables.**
+// That is what keeps a key held across a remap from being stranded —
+// and it means the new binding INHERITS both tables, so an action bound
+// onto an already-held key reads pressed at once, and fires a
+// `just_pressed` edge the player never made for it.
+// @INP-004 — a rebind inherits the keys already held, edges included
+fn test_a_remap_inherits_the_held_keys() {
+  rb_s = platformer_state();
+
+  // The player is holding A, which is "use".
+  rb_s.input_tick_from_state(keys_down([KEY_A]), 0.0, 0.0, 0, 0);
+  assert(rb_s.is_action_just_pressed("use"), "A rose for `use`");
+
+  // They remap "jump" onto A while still holding it.
+  rb_s.input_set_bindings(input::Bindings{
+    bnd_actions: [input::ActionBinding{ab_name: "jump", ab_keys: [KEY_A]}],
+    bnd_axes: []
+  });
+
+  // ⚠ `jump` is held immediately — the intended half: a key down across
+  // the remap is not stranded until the player lets go and presses again.
+  assert(rb_s.is_action_pressed("jump"), "the held key carries into the new binding");
+  // ⚠ ...and the unintended half: `jump` also fires its rising edge on
+  // this tick, off a press aimed at `use`.  Apply a remap on a frame
+  // where the key is up, or absorb one frame of edges after applying it.
+  assert(rb_s.is_action_just_pressed("jump"), "the new binding inherited the edge");
+
+  // The next tick with A still down settles it: held, no edge.
+  rb_s.input_tick_from_state(keys_down([KEY_A]), 0.0, 0.0, 0, 0);
+  assert(rb_s.is_action_pressed("jump") && !rb_s.is_action_just_pressed("jump"),
+         "one frame later the inherited edge is spent");
+
+  // ⚠ How complete the inherited table is depends on WHICH tick door ran.
+  // `input_tick_from_state` copies the whole snapshot, so even a key no
+  // binding mentions is recorded and a rebind onto it reads pressed at
+  // once.  `input_tick` polls only the keys the bindings name, so the
+  // same rebind reads false there until the next tick refreshes it.
+  rb_u = platformer_state();
+  rb_u.input_tick_from_state(keys_down([KEY_B]), 0.0, 0.0, 0, 0);   // B binds to nothing
+  rb_u.input_set_bindings(input::Bindings{
+    bnd_actions: [input::ActionBinding{ab_name: "crouch", ab_keys: [KEY_B]}],
+    bnd_axes: []
+  });
+  assert(rb_u.is_action_pressed("crouch"), "the snapshot door recorded the unbound key");
+}
+
+fn main() {
+  test_a_frame_loop_ticks_once();
+  test_a_misspelt_name_is_silent();
+  test_one_button_constant_per_call();
+  test_a_remap_inherits_the_held_keys();
+  println("input worked examples passed");
+}

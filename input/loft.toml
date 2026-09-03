@@ -5,6 +5,7 @@ loft    = ">=2026.7.2"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 repository = "loft-libs-game"
+description = "Game input for loft — action/axis bindings resolved to per-tick input state."
 
 [library]
 entry = "src/input.loft"

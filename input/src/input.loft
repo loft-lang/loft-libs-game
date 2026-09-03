@@ -1,18 +1,13 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// ⚠️  STATUS — PARKED 2026-06-01 (W.13 Stage 1 design landed; runtime
-// blocked on [@P391](../../doc/claude/PROBLEMS.md#open-issues--quick-reference)).
-// The lib compiles + parses clean and the API is final, but `input_new`'s
-// returned `InputState` is currently allocated in CONST_STORE under the
-// cross-package call path (`use input;` + `input::input_new(b)`), so any
-// subsequent `self.<field> = …` write through `&InputState` panics with
-// `Write to read-only store`.  Tests are gated by `LIB_PKGS_SKIP` (interp,
-// native) + `LIB_PKGS_NODE_SKIP` (wasm) until @P391 fixes the compiler-
-// side issue.  Source kept here so the design + comments are reviewable
-// and the lib is one compiler-bug-fix away from a Stage A extraction.
-//
 // input — abstract input state + key bindings for loft games.
+//
+// (This library was parked from 2026-06-01 to 2026-06-04 on two loft
+// compiler bugs — a cross-package constructor landing in CONST_STORE
+// (loft#248) and a nested `&self` method call whose writes did not
+// persist on the interpreter (loft#266).  Both are fixed and the test
+// gate is gone; the suite runs on the interpreter and `--native`.)
 //
 // Wraps the polled input primitives exposed by the `graphics` library
 // (`gl_key_pressed`, `gl_mouse_x`/`gl_mouse_y`, `gl_mouse_button`,
@@ -39,8 +34,10 @@
 // graphics — the same edge-detection logic runs on either input
 // source, so tests don't need a real GL context.
 //
-// Plan slot: LAVITION.md § input library; loft-libs-game inhabitant
-// once the design is exercised in a real consumer.
+// `input_tick` is the only function CI cannot exercise — it polls a live
+// GL context.  Everything else runs headless through
+// `input_tick_from_state`, which takes the same snapshot a replay or a
+// network rollback would feed it.
 
 use graphics;
 
@@ -129,6 +126,7 @@ pub fn input_new(b: Bindings) -> InputState {
 // remaps keys in a settings menu).  Does NOT clear the key tables —
 // in-flight key presses survive the rebind so a remap doesn't
 // strand an already-held key.
+// Example: @INP-004
 pub fn input_set_bindings(self: &InputState, b: Bindings) {
   self.is_bindings = b;
 }
@@ -151,6 +149,7 @@ fn advance_tick(self: &InputState) {
 // current bindings (avoids a 256-call sweep — only ask about keys
 // the game actually cares about), plus `gl_mouse_x`/`gl_mouse_y`/
 // `gl_mouse_button`/`gl_mouse_wheel` unconditionally.
+// Example: @INP-001
 pub fn input_tick(self: &InputState) {
   self.advance_tick();
   for ab in self.is_bindings.bnd_actions {
@@ -178,6 +177,7 @@ pub fn input_tick(self: &InputState) {
 // `graphics`.  Used by tests (no GL context) and by network replay
 // / record-playback systems.  `keys` length is clamped to KEY_MAX;
 // out-of-range entries are ignored.
+// Example: @INP-001
 pub fn input_tick_from_state(
   self: &InputState,
   keys: vector<boolean>,
@@ -197,6 +197,7 @@ pub fn input_tick_from_state(
 }
 
 // True if ANY of the action's bound keys is currently down.
+// Example: @INP-002
 pub fn is_action_pressed(self: const InputState, action: text) -> boolean {
   for ab in self.is_bindings.bnd_actions {
     if ab.ab_name != action { continue; }
@@ -211,6 +212,7 @@ pub fn is_action_pressed(self: const InputState, action: text) -> boolean {
 // True for exactly one tick: the moment any of the action's bound
 // keys transitions from up to down.  If multiple bound keys all
 // transition on the same tick it still fires once.
+// Example: @INP-001
 pub fn is_action_just_pressed(self: const InputState, action: text) -> boolean {
   for ab in self.is_bindings.bnd_actions {
     if ab.ab_name != action { continue; }
@@ -224,6 +226,7 @@ pub fn is_action_just_pressed(self: const InputState, action: text) -> boolean {
 
 // True for exactly one tick: the moment any of the action's bound
 // keys transitions from down to up.
+// Example: @INP-001
 pub fn is_action_just_released(self: const InputState, action: text) -> boolean {
   for ab in self.is_bindings.bnd_actions {
     if ab.ab_name != action { continue; }
@@ -238,6 +241,7 @@ pub fn is_action_just_released(self: const InputState, action: text) -> boolean 
 // Read an axis pair: -1.0 if only `ax_neg` is down, +1.0 if only
 // `ax_pos` is down, 0.0 if neither or both.  Unknown axis name
 // returns 0.0.
+// Example: @INP-002
 pub fn get_axis(self: const InputState, axis: text) -> float {
   for ax in self.is_bindings.bnd_axes {
     if ax.ax_name != axis { continue; }
@@ -253,16 +257,19 @@ pub fn get_axis(self: const InputState, axis: text) -> float {
 // Mouse position — pixels from the top-left of the window
 // (matches `graphics::gl_mouse_x` / `gl_mouse_y`).
 pub fn mouse_x(self: const InputState) -> float { self.is_mouse_x }
+// The pointer's y this frame, the companion of `mouse_x`.
 pub fn mouse_y(self: const InputState) -> float { self.is_mouse_y }
 
 // True if the given mouse button (`MB_LEFT` / `MB_RIGHT` / `MB_MIDDLE`)
 // is currently down.  Pass the constant, not a bitmask of multiple.
+// Example: @INP-003
 pub fn mouse_button_down(self: const InputState, button: integer) -> boolean {
   (self.is_mouse_buttons_now & button) != 0
 }
 
 // True for exactly one tick — the moment the button transitions
 // from up to down.
+// Example: @INP-003
 pub fn mouse_button_just_pressed(self: const InputState, button: integer) -> boolean {
   now_down = (self.is_mouse_buttons_now & button) != 0;
   prev_down = (self.is_mouse_buttons_prev & button) != 0;
