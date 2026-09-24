@@ -1,0 +1,186 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the library's hot public routines, timed on a fixed
+// workload, with a hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     python3 <loft>/bench/stats.py --package .         every lane, joined
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, calls per op,
+// ns per call, and an FNV-1a-32 hash of ONE canonical op's output.  The hash is what makes
+// a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust twin in
+// bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to — and only then does comparing their speeds mean anything.
+//
+// The inputs are a fixed table of 512 instants from 1900 to 2099, the same in every lane.
+// Repetition `r` starts its walk of the table at `r`, so each repetition reads different
+// VALUES for the same amount of work (every instant formats to 20 bytes), and nothing can be
+// hoisted out of the repetition loop.  Each timed loop folds its results into a sink, which
+// the last line prints, so no backend can drop the work as unused.
+use time;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+const MASK32 = 0xFFFFFFFF;
+
+/// The instant table: 512 epoch-millisecond values from 1900-01-01 on, 12345678901 ms apart.
+const TABLE = 512;
+const EPOCH_BASE = -2208988800000;
+const EPOCH_STEP = 12345678901;
+
+/// Calls per op, in the census's proportions (2M : 2M : 10M : 5M).
+const PARSE_BATCH = 10000;
+const FORMAT_BATCH = 10000;
+const DAY_BATCH = 100000;
+const WEEK_BATCH = 50000;
+
+/// FNV-1a-32 over the low 32 bits of `w`, high byte first.
+fn fnv_word(fw_h: integer, fw_v: integer) -> integer {
+  fw_w = fw_v & MASK32;
+  fw_r = ((fw_h ^ ((fw_w >> 24) & 255)) * FNV_PRIME) & MASK32;
+  fw_r = ((fw_r ^ ((fw_w >> 16) & 255)) * FNV_PRIME) & MASK32;
+  fw_r = ((fw_r ^ ((fw_w >> 8) & 255)) * FNV_PRIME) & MASK32;
+  ((fw_r ^ (fw_w & 255)) * FNV_PRIME) & MASK32
+}
+
+/// A full 64-bit integer: its high word, then its low word.
+fn fnv_int(fi_h: integer, fi_v: integer) -> integer {
+  fnv_word(fnv_word(fi_h, (fi_v >> 32) & MASK32), fi_v)
+}
+
+/// A text: one step per UTF-8 byte.
+fn fnv_text(ft_h: integer, ft_s: text) -> integer {
+  ft_r = ft_h;
+  for i in 0..size(ft_s) {
+    ft_r = ((ft_r ^ ft_s.byte_at(i)) * FNV_PRIME) & MASK32;
+  }
+  ft_r
+}
+
+fn epochs() -> vector<integer> {
+  [for k in 0..TABLE { EPOCH_BASE + k * EPOCH_STEP }]
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── parse: an ISO timestamp back to milliseconds ────────────────────
+
+fn bench_parse(n: integer, bp_ep: const vector<integer>) -> Row {
+  bp_strs: vector<text> = [];
+  for e in bp_ep { bp_strs += [time::format_iso(e)]; }
+  bp_t0 = ticks();
+  bp_sink = 0;
+  for r in 0..n {
+    for i in 0..PARSE_BATCH {
+      bp_sink = bp_sink ^ (time::parse(bp_strs[(r + i) & (TABLE - 1)]?) ?? 0);
+    }
+  }
+  bp_us = ticks() - bp_t0;
+  bp_h = FNV_OFFSET;
+  for i in 0..PARSE_BATCH {
+    bp_h = fnv_int(bp_h, time::parse(bp_strs[i & (TABLE - 1)]?) ?? 0);
+  }
+  Row { name: "parse", iters: n, us: bp_us, px: PARSE_BATCH, hash: bp_h, sink: bp_sink }
+}
+
+// ── format_iso: milliseconds to "YYYY-MM-DDTHH:MM:SSZ" ──────────────
+
+fn bench_format(n: integer, bf_ep: const vector<integer>) -> Row {
+  bf_t0 = ticks();
+  bf_sink = 0;
+  for r in 0..n {
+    for i in 0..FORMAT_BATCH {
+      bf_s = time::format_iso(bf_ep[(r + i) & (TABLE - 1)]?);
+      bf_sink += bf_s.byte_at(18);
+    }
+  }
+  bf_us = ticks() - bf_t0;
+  bf_h = FNV_OFFSET;
+  for i in 0..FORMAT_BATCH {
+    bf_h = fnv_text(bf_h, time::format_iso(bf_ep[i & (TABLE - 1)]?));
+  }
+  Row { name: "format_iso", iters: n, us: bf_us, px: FORMAT_BATCH, hash: bf_h, sink: bf_sink }
+}
+
+// ── day: the day of the month ───────────────────────────────────────
+
+fn bench_day(n: integer, bd_ep: const vector<integer>) -> Row {
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n {
+    for i in 0..DAY_BATCH {
+      bd_sink += time::day(bd_ep[(r + i) & (TABLE - 1)]?);
+    }
+  }
+  bd_us = ticks() - bd_t0;
+  bd_h = FNV_OFFSET;
+  for i in 0..DAY_BATCH {
+    bd_h = fnv_int(bd_h, time::day(bd_ep[i & (TABLE - 1)]?));
+  }
+  Row { name: "day", iters: n, us: bd_us, px: DAY_BATCH, hash: bd_h, sink: bd_sink }
+}
+
+// ── iso_week: the ISO-8601 week number ──────────────────────────────
+
+fn bench_iso_week(n: integer, bw_ep: const vector<integer>) -> Row {
+  bw_t0 = ticks();
+  bw_sink = 0;
+  for r in 0..n {
+    for i in 0..WEEK_BATCH {
+      bw_sink += time::iso_week(bw_ep[(r + i) & (TABLE - 1)]?);
+    }
+  }
+  bw_us = ticks() - bw_t0;
+  bw_h = FNV_OFFSET;
+  for i in 0..WEEK_BATCH {
+    bw_h = fnv_int(bw_h, time::iso_week(bw_ep[i & (TABLE - 1)]?));
+  }
+  Row { name: "iso_week", iters: n, us: bw_us, px: WEEK_BATCH, hash: bw_h, sink: bw_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_ep = epochs();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_sink = 0;
+  mn_row = bench_parse(mn_n, mn_ep);
+  print_row(mn_row);
+  mn_sink = mn_sink ^ mn_row.sink;
+  mn_row = bench_format(mn_n, mn_ep);
+  print_row(mn_row);
+  mn_sink = mn_sink ^ mn_row.sink;
+  mn_row = bench_day(mn_n, mn_ep);
+  print_row(mn_row);
+  mn_sink = mn_sink ^ mn_row.sink;
+  mn_row = bench_iso_week(mn_n, mn_ep);
+  print_row(mn_row);
+  mn_sink = mn_sink ^ mn_row.sink;
+  println("sink={mn_sink}");
+}
