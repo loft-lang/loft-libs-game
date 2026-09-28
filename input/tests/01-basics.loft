@@ -12,7 +12,7 @@
 // Action coverage: every public symbol of the library is exercised
 // at least once here.
 
-use input;
+use input::*;
 
 KEY_SPACE = 32;
 KEY_LEFT  = 130;

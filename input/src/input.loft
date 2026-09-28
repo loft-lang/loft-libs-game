@@ -180,7 +180,7 @@ pub fn input_tick(self: &InputState) {
 // Example: @INP-001
 pub fn input_tick_from_state(
   self: &InputState,
-  keys: vector<boolean>,
+  keys: const vector<boolean>,
   mx: float, my: float,
   mbtn: integer, wheel: integer
 ) {
