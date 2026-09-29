@@ -22,7 +22,7 @@
 // ## The smallest thing that does something
 //
 // Parse an ISO date, read a field off it, print it back:
-use time;
+use time::*;
 
 fn main() {
   d = time::parse("2026-05-25") ?? 0;

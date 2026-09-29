@@ -4,7 +4,7 @@
 // Basic date/time operation tests — run on interpreter, --native, and
 // wasm.  All goldens are hand-computed against the proleptic Gregorian
 // calendar so they pin cross-backend parity.
-use time;
+use time::*;
 
 fn test_parse_and_fields() {
     t = (time::parse("2026-05-25") ?? 0);

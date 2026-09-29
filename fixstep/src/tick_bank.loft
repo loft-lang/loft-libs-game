@@ -94,7 +94,7 @@
 // than on top of it.  ⚠ One clever type that "handles both" is the
 // over-unification this plan was written to avoid.
 
-use tick_clock;
+use tick_clock::*;
 
 // How finely a rate is quantised: millionths of a whole unit per
 // second.

@@ -22,7 +22,7 @@
 // tell milliseconds from days, an instant from an offset-shifted one, or
 // a calendar-year number from an ISO-year one — and each of those
 // confusions is a well-typed expression that answers something wrong.
-use time;
+use time::*;
 
 // A deadline three days out, and the reminder that goes with it.
 //
