@@ -19,7 +19,7 @@
 // VALUES for the same amount of work (every instant formats to 20 bytes), and nothing can be
 // hoisted out of the repetition loop.  Each timed loop folds its results into a sink, which
 // the last line prints, so no backend can drop the work as unused.
-use time;
+use time::*;
 
 /// One measured routine.
 struct Row {

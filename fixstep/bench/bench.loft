@@ -17,7 +17,7 @@
 // Every op builds its own state from the repetition number `r`, and `r & 1` moves a start
 // value — never the amount of work — so no backend can hoist an op out of the repetition
 // loop.  Each op's result is folded into `sink`, printed on the last line.
-use fixstep;
+use fixstep::*;
 
 /// One measured routine.
 struct Row {
