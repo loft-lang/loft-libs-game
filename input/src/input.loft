@@ -39,7 +39,7 @@
 // `input_tick_from_state`, which takes the same snapshot a replay or a
 // network rollback would feed it.
 
-use graphics;
+use graphics::*;
 
 // Maximum key code the library tracks.  Graphics's highest constant
 // today is `KEY_F12 = 146`; 256 leaves room for future additions and
@@ -180,7 +180,7 @@ pub fn input_tick(self: &InputState) {
 // Example: @INP-001
 pub fn input_tick_from_state(
   self: &InputState,
-  keys: vector<boolean>,
+  keys: const vector<boolean>,
   mx: float, my: float,
   mbtn: integer, wheel: integer
 ) {

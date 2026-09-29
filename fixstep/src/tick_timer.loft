@@ -110,7 +110,7 @@
 // **No RATE.**  That is `tick_bank.loft`, and the whole file above is
 // why the two are not one.
 
-use tick_clock;
+use tick_clock::*;
 
 // A one-shot duration and how much of it has been spent.
 //

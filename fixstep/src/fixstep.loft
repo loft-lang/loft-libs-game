@@ -118,7 +118,7 @@
 // **No tick COUNTER.**  A game already counts its own ticks, and a
 // second counter beside it is two facts that can disagree.
 
-use tick_clock;
-use tick_bank;
-use tick_timer;
-use ease;
+pub use tick_clock::*;
+pub use tick_bank::*;
+pub use tick_timer::*;
+pub use ease::*;

@@ -14,7 +14,7 @@
 // ⚠ These are examples FIRST and assertions second: each one is written
 // the way a caller would actually write it, not the way that would be
 // shortest to assert on.
-use fixstep;
+use fixstep::*;
 
 // A step of 2/3 s in this package's first consumer's base unit — 1/3 of
 // a microsecond, 3 000 000 to the second.  ⚠ The unit is the CONSUMER's

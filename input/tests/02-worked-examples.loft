@@ -26,7 +26,7 @@
 // Every example drives the state through `input_tick_from_state`, so
 // they run headless — no GL context, and the same edge-detection code
 // path a polled game takes.
-use input;
+use input::*;
 
 // Key codes as `graphics` numbers them (`KEY_A` = 97, `KEY_SPACE` = 32,
 // `KEY_LEFT` = 130, `KEY_RIGHT` = 131).  A game reads them from
