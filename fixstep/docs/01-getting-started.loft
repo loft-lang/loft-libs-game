@@ -1,0 +1,109 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Step a simulation at a fixed rate from a frame clock, move at a rate, and fire a cooldown once.
+//
+// `fixstep` owns the arithmetic of a fixed simulation step: how many steps a frame's elapsed
+// time buys, how far between two steps the present is, how much ground a rate covers, and when
+// a one-shot cooldown fires.  It keeps every duration as an exact INTEGER count of one base
+// unit, so nothing drifts and nothing is lost to rounding; floating point appears only where
+// something is drawn.  What a step DOES is yours — this never calls your code, it answers
+// "how many".
+use fixstep::*;
+
+// 60 steps a second, in the base unit `CLOCK_UNITS_PER_SECOND` (3 000 000 to the second, so
+// 24, 25, 30, 50, 60 and 120 Hz are all whole numbers of units).
+STEP = 50000;
+
+fn main() {
+  clk = clock_new(STEP);
+  // A frame of 1/30 s is 100 000 units: two whole steps.
+  n = clock_advance(clk, 100000);
+  println("a 1/30 s frame buys {n} steps");
+  assert(STEP == CLOCK_UNITS_PER_SECOND / 60 && n == 2, "two 60 Hz steps in a 30 Hz frame");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  the_remainder_is_banked();
+  a_rate_covers_exact_ground();
+  a_cooldown_fires_once();
+  easing_is_for_drawing();
+}
+
+// That prints:
+//
+//     a 1/30 s frame buys 2 steps
+//
+// ## The remainder is banked
+//
+// A frame rarely holds a whole number of steps.  `clock_advance` runs the steps it can and
+// BANKS the rest for the next frame, so a 70 000-unit frame runs one step and keeps 20 000.
+// `clock_alpha` says how far into the next step the present is — 0.4 here — which is what a
+// renderer interpolates with; it is always below 1.0.
+
+fn the_remainder_is_banked() {
+  clk = clock_new(STEP);
+  assert(clock_advance(clk, 70000) == 1, "one whole step");
+  assert(clock_banked(clk) == 20000 && clock_alpha(clk) == 0.4, "20 000 kept, 0.4 of a step");
+  assert(clock_advance(clk, 30000) == 1, "the bank and this frame make the next step");
+  println("bank    : 70 000 units -> 1 step, alpha 0.4; 30 000 more -> 1 step");
+}
+
+// ## A rate covers exact ground
+//
+// A mover at 1.5 cells a second, ticked at 60 Hz, covers 0.025 of a cell per step — never a
+// whole cell, so a mover that truncated would never move.  A `Bank` accumulates the progress as
+// an integer and releases WHOLE units as they complete; the remainder stays banked, so over
+// two seconds the mover covers exactly 3 cells, and after one it has 1 with half a cell banked.
+
+fn a_rate_covers_exact_ground() {
+  b = bank_new();
+  rate = bank_rate(1.5);
+  moved = 0;
+  for _ in 0..60 { moved += bank_gain(b, rate, STEP, BANK_WHOLE); }
+  assert(moved == 1 && bank_fraction(b, BANK_WHOLE) == 0.5, "one second: 1 cell, half banked");
+  for _ in 0..60 { moved += bank_gain(b, rate, STEP, BANK_WHOLE); }
+  assert(moved == 3, "two seconds: exactly 3 cells");
+  println("rate    : 1.5 cells/s for 2 s -> {moved} cells");
+}
+
+// ## A cooldown fires once
+//
+// A `Timer` is a one-shot: arm it with a duration, spend each tick's time into it, and
+// `timer_spend` answers true on exactly the tick it completes — and then it is stopped, so it
+// never fires again until it is armed again.  A 0.25 s cooldown at 60 Hz fires on the 15th
+// tick.  (A `Bank` would carry its remainder into the next arming and fire on its own; the
+// README's table says which type each job wants.)
+
+fn a_cooldown_fires_once() {
+  t = timer_armed(clock_units_from_seconds(0.25));
+  fired_at = 0;
+  for tick in 1..21 {
+    if timer_spend(t, STEP) {
+      assert(fired_at == 0, "only once");
+      fired_at = tick;
+    }
+  }
+  assert(fired_at == 15 && !timer_running(t), "on the 15th tick, then stopped");
+  println("timer   : a 0.25 s cooldown fires on tick {fired_at}");
+}
+
+// ## Easing is for drawing
+//
+// `approach(now, want, k, dt)` moves a drawn value — a camera, a gauge — toward its target by
+// the fraction `k` closes per second, independent of the frame rate.  It is the one part of the
+// package in floating point, because it only ever feeds a picture; a frame with no time in it
+// (a paused game) does not move it at all.
+
+fn easing_is_for_drawing() {
+  v = approach(0.0, 10.0, 2.0, 0.5);
+  assert(abs(v - 10.0 * (1.0 - exp(-1.0))) < 0.000000001, "10 * (1 - e^-1)");
+  assert(approach(3.0, 10.0, 2.0, 0.0) == 3.0, "a paused frame does not creep");
+  println("ease    : half a second at k=2 covers {v:.4} of 10");
+}
+
+// ## Where to go next
+//
+// - `tests/01-doors.loft` — one worked example per door, `@FIX-001` … `@FIX-013`: a frame loop,
+//   a script that steps by count, a server pump, rollback, slow motion, a slow clock driven by a
+//   fast one, and the easing of an angle the short way round.
