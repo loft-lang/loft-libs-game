@@ -1,6 +1,6 @@
 [package]
 name    = "time"
-version = "0.3.2"
+version = "0.3.3"
 loft    = ">=2026.7.2"
 repository = "loft-libs-game"
 description = "Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM."
