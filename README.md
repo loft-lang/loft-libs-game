@@ -35,12 +35,12 @@ games don't have to chase mutually-compatible point versions across
 
 | Subdir | Package | Status |
 |---|---|---|
-| `time/` | time | ✅ 0.2.0 — date/time arithmetic, `DateTime` / `Duration` |
-| `fixstep/` | fixstep | ✅ 0.1.0 — the fixed simulation step: clock, bank, one-shot timer, ease |
-| `input/` | input | (planned — wraps `graphics::poll_events` into action state + bindings) |
+| `time/` | time | ✅ date/time arithmetic, `DateTime` / `Duration` |
+| `fixstep/` | fixstep | ✅ the fixed simulation step: clock, bank, one-shot timer, ease |
+| `input/` | input | ✅ named actions and axes over `graphics`' keys and mouse, with per-tick edges |
 | `particles/` | particles | (planned, lib_plans/future/27) |
 | `physics_2body/` | physics_2body | (planned, lib_plans/future/26) |
-| `audio_bus/` | audio_bus | (planned — game-side mixer above graphics's raw audio surface) |
+| `audio_bus/` | audio_bus | ✅ buses that multiply, and a duck that restores exactly |
 
 ## License
 

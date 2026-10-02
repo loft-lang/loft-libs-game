@@ -1,0 +1,119 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Name the player's actions once, tick input once a frame, and ask "is the player jumping?".
+//
+// `input` turns raw keys and mouse buttons into what a game asks about: a named ACTION bound to
+// one or more keys ("jump" on SPACE or UP), the one tick an action was pressed or released, and
+// an AXIS that reads -1 / 0 / +1 from a pair of keys.  Game code asks for "jump", not for key 32,
+// so a rebind changes one table instead of every call site.
+//
+// It reads `graphics`' polled keyboard and mouse once per `input_tick`.  This guide drives it with
+// `input_tick_from_state` instead — the same edge detection from a snapshot you supply — so it
+// runs with no window, the way a test, a replay or a network rollback does.
+use graphics::*;    // the key codes: KEY_SPACE, KEY_LEFT, …
+use input::*;
+
+// One frame's keyboard: every key code up except the ones listed.
+fn keys_down(held: vector<integer>) -> vector<boolean> {
+  out: vector<boolean> = [];
+  for code in 0..256 {
+    down = false;
+    for h in held { if h == code { down = true; } }
+    out += [down];
+  }
+  out
+}
+
+fn controls() -> InputState {
+  input_new(Bindings {
+    bnd_actions: [ActionBinding { ab_name: "jump", ab_keys: [KEY_SPACE, KEY_UP] }],
+    bnd_axes: [AxisBinding { ax_name: "move", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT }]
+  })
+}
+
+fn main() {
+  st = controls();
+  st.input_tick_from_state(keys_down([KEY_SPACE, KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  println("jump {st.is_action_pressed("jump")}, just {st.is_action_just_pressed("jump")}, move {st.get_axis("move")}");
+  assert(st.is_action_pressed("jump") && st.is_action_just_pressed("jump"), "SPACE is down, and was not last tick");
+  assert(st.get_axis("move") == 1.0, "only the positive key of the pair is down");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  an_edge_lasts_one_tick();
+  an_axis_cancels();
+  a_name_is_just_text();
+  the_mouse();
+}
+
+// That prints:
+//
+//     jump true, just true, move 1
+//
+// ## An edge lasts one tick
+//
+// `is_action_pressed` is true while any bound key is down.  `is_action_just_pressed` is true
+// for exactly the one tick it went from up to down, and `is_action_just_released` for the tick
+// it came back up.  The TICK consumes the edge, not the query: ask as often as you like within
+// a frame, but tick once per frame — a second tick in the same frame swallows the press.
+
+fn an_edge_lasts_one_tick() {
+  st = controls();
+  st.input_tick_from_state(keys_down([KEY_UP]), 0.0, 0.0, 0, 0);
+  assert(st.is_action_just_pressed("jump"), "UP is the jump's other key");
+  st.input_tick_from_state(keys_down([KEY_UP]), 0.0, 0.0, 0, 0);
+  assert(st.is_action_pressed("jump") && !st.is_action_just_pressed("jump"), "held: no new edge");
+  st.input_tick_from_state(keys_down([]), 0.0, 0.0, 0, 0);
+  assert(st.is_action_just_released("jump") && !st.is_action_pressed("jump"), "released");
+  println("edge    : pressed, held, released — one tick each");
+}
+
+// ## An axis cancels
+//
+// An axis reads -1.0 with only its negative key down, +1.0 with only its positive key, and 0.0
+// with neither or both — the convention every engine uses, so holding both does not drift.
+
+fn an_axis_cancels() {
+  st = controls();
+  st.input_tick_from_state(keys_down([KEY_LEFT]), 0.0, 0.0, 0, 0);
+  assert(st.get_axis("move") == -1.0, "left");
+  st.input_tick_from_state(keys_down([KEY_LEFT, KEY_RIGHT]), 0.0, 0.0, 0, 0);
+  assert(st.get_axis("move") == 0.0, "both cancel");
+  println("axis    : -1, then 0 with both keys");
+}
+
+// ## A name is just text
+//
+// Action and axis names are plain `text`, never declared.  An unknown action reads false and an
+// unknown axis 0.0 — exactly what an unpressed or centred one reads — so a misspelt name is a
+// control that silently never fires.  Keep the names in one place.
+
+fn a_name_is_just_text() {
+  st = controls();
+  st.input_tick_from_state(keys_down([KEY_SPACE]), 0.0, 0.0, 0, 0);
+  assert(st.is_action_pressed("jump") && !st.is_action_pressed("jmup"), "the typo reads as unpressed");
+  assert(st.get_axis("mvoe") == 0.0, "and an unknown axis as centred");
+  println("names   : a typo is quiet, so keep the names in one place");
+}
+
+// ## The mouse
+//
+// `mouse_x` / `mouse_y` are window pixels; `mouse_button_down` and its `_just_pressed` /
+// `_just_released` take ONE of `MB_LEFT`, `MB_RIGHT`, `MB_MIDDLE` — a mask of two would answer
+// "either", and its edge would miss the second button.
+
+fn the_mouse() {
+  st = controls();
+  st.input_tick_from_state(keys_down([]), 120.0, 80.0, MB_LEFT, 0);
+  assert(st.mouse_x() == 120.0 && st.mouse_y() == 80.0, "where the pointer is");
+  assert(st.mouse_button_just_pressed(MB_LEFT) && !st.mouse_button_down(MB_RIGHT), "left went down");
+  println("mouse   : ({st.mouse_x()}, {st.mouse_y()}), left pressed");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@INP-001` … `@INP-004`: tick once per frame, a name is
+//   bare text, a mouse mask means "either", and a rebind keeps the keys already held.
+// - In a game, call `st.input_tick()` once per frame instead: it polls `graphics` for the keys
+//   the bindings name.

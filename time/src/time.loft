@@ -415,7 +415,11 @@ pub fn month_name(mnt: integer) -> text {
 // The `"…" as DateTime` conversion is a TOTAL best-effort parse (bad input →
 // epoch) for the ergonomic path where an invalid date need not be caught.
 
+// A point in time: milliseconds since the epoch, UTC.  `date` and `datetime` make one, and
+// `"2026-07-08" as DateTime` parses one; subtracting two gives a `Duration`.
 pub value struct DateTime { ms: integer }
+// A span of time in milliseconds, negative when it runs backwards.  `milliseconds`,
+// `seconds`, `minutes`, `hours`, `days` and `weeks` make one.
 pub value struct Duration { ms: integer }
 
 // ── DateTime construction ──

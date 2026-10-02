@@ -1,0 +1,17 @@
+[package]
+name    = "audio_bus"
+version = "0.1.0"
+loft    = ">=0.8"
+repository = "loft-libs-game"
+description = "A mixer for game audio — buses that multiply, and a duck that restores exactly"
+categories  = ["game", "audio"]
+
+# ⚠ FIRST release, so both floors are this release itself.
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+[library]
+entry = "src/audio_bus.loft"
+
+[dependencies]
+graphics = ">=0.9.0"

@@ -42,6 +42,8 @@ if state.is_action_just_pressed("jump") { player.jump(); }
 vx = state.get_axis("horizontal");
 ```
 
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
+
 ## The four contracts a signature does not carry
 
 Each links to a test that demonstrates it and is run by CI — the code below

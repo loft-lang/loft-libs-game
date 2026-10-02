@@ -1,0 +1,192 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes, ns per item, and an FNV-1a-32 hash of one canonical op's output.  The hash is
+// what makes a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not computing
+// the routine it claims to — and only then does comparing their speeds mean anything.
+//
+// Every op builds its own state from the repetition number `r`, and `r & 1` moves a start
+// value — never the amount of work — so no backend can hoist an op out of the repetition
+// loop.  Each op's result is folded into `sink`, printed on the last line.
+use fixstep::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+// The consumer's base unit: 1/3 µs, so a step of 2/3 s and a 60 fps frame.
+const STEP = 2000000;
+const FRAME_60 = 50000;
+
+const CALLS = 2500000;
+const TIMERS = 20000;
+const TICKS = 250;
+const VALUES = 4000;
+const FRAMES = 1200;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The server pump: three frames deep for six integer operations ───
+
+/// A pump fed an absolute wall reading every call; the wall advances a jittered frame.
+fn pump_op(r: integer) -> vector<integer> {
+  po_clk = clock_new(STEP + (r & 1));
+  po_now = 1000;
+  po_steps = 0;
+  for i in 0..CALLS {
+    po_now += FRAME_60 + (i & 1023) * 7;
+    po_steps += clock_pump(po_clk, po_now);
+  }
+  [po_steps, clock_banked(po_clk)]
+}
+
+fn bench_pump(n: integer) -> Row {
+  bp_t0 = ticks();
+  bp_sink = 0;
+  for r in 0..n { bp_sink += pump_op(r)[0]?; }
+  bp_us = ticks() - bp_t0;
+  Row { name: "clock_pump", iters: n, us: bp_us, px: CALLS, hash: fnv(FNV_OFFSET, pump_op(0)),
+        sink: bp_sink }
+}
+
+// ── The frame door: elapsed time in, a step count out ───────────────
+
+/// A clock at a 3/4 rate, so the rate carry is live, spent a jittered frame per call.
+fn advance_op(r: integer) -> vector<integer> {
+  ao_clk = clock_new(STEP + (r & 1));
+  clock_set_rate(ao_clk, 3, 4);
+  ao_steps = 0;
+  for i in 0..CALLS {
+    ao_steps += clock_advance(ao_clk, FRAME_60 + (i & 1023) * 7);
+  }
+  [ao_steps, clock_banked(ao_clk)]
+}
+
+fn bench_advance(n: integer) -> Row {
+  ba_t0 = ticks();
+  ba_sink = 0;
+  for r in 0..n { ba_sink += advance_op(r)[0]?; }
+  ba_us = ticks() - ba_t0;
+  Row { name: "clock_advance", iters: n, us: ba_us, px: CALLS,
+        hash: fnv(FNV_OFFSET, advance_op(0)), sink: ba_sink }
+}
+
+// ── One-shot timers, spent every tick and re-armed when they fire ───
+
+fn timer_op(r: integer) -> vector<integer> {
+  to_timers: vector<Timer> = [];
+  for _ in 0..TIMERS { to_timers += [timer_new()]; }
+  for t in to_timers { timer_arm(t, 1000 + (t#index * 37 + r) % 4001); }
+  to_fires = 0;
+  for k in 0..TICKS {
+    to_units = 40 + (k & 15) * 3;
+    for t in to_timers {
+      if timer_spend(t, to_units) {
+        to_fires += 1;
+        timer_arm(t, 1000 + (t#index * 37 + k) % 4001);
+      }
+    }
+  }
+  to_spent = 0;
+  for t in to_timers { to_spent += timer_spent(t); }
+  [to_fires, to_spent]
+}
+
+fn bench_timer(n: integer) -> Row {
+  bt_t0 = ticks();
+  bt_sink = 0;
+  for r in 0..n { bt_sink += timer_op(r)[0]?; }
+  bt_us = ticks() - bt_t0;
+  Row { name: "timer_spend", iters: n, us: bt_us, px: TIMERS * TICKS,
+        hash: fnv(FNV_OFFSET, timer_op(0)), sink: bt_sink }
+}
+
+// ── The ease: one exp() per value per frame ─────────────────────────
+
+/// Values eased toward a target that steps every 64 frames; each value has its own rate,
+/// so the ease fraction cannot be shared across a frame.
+fn approach_op(r: integer) -> vector<float> {
+  ap_vals: vector<float> = [];
+  for i in 0..VALUES { ap_vals += [(i as float) * 0.5 + ((r & 1) as float)]; }
+  for f in 0..FRAMES {
+    ap_dt = 0.016 + ((f & 3) as float) * 0.0005;
+    ap_lift = (((f >> 6) & 7) as float) * 10.0;
+    for i in 0..VALUES {
+      ap_k = 1.5 + ((i & 15) as float) * 0.125;
+      ap_vals[i] = approach(ap_vals[i]?, ((i & 255) as float) + ap_lift, ap_k, ap_dt);
+    }
+  }
+  ap_vals
+}
+
+fn bench_approach(n: integer) -> Row {
+  ba2_t0 = ticks();
+  ba2_sink = 0;
+  for r in 0..n { ba2_sink += (approach_op(r)[1]? * 1000.0) as integer; }
+  ba2_us = ticks() - ba2_t0;
+  ba2_one = approach_op(0);
+  ba2_ints: vector<integer> = [];
+  for v in ba2_one { ba2_ints += [(v * 1000000.0) as integer]; }
+  Row { name: "approach", iters: n, us: ba2_us, px: VALUES * FRAMES,
+        hash: fnv(FNV_OFFSET, ba2_ints), sink: ba2_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_pump(mn_n), bench_advance(mn_n), bench_timer(mn_n),
+                          bench_approach(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

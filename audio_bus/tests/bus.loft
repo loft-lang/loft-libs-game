@@ -1,0 +1,151 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// What a bus multiplies, and what a duck puts back.
+//
+// Every number below is hand-computed from the tree, not read off a run. And
+// nothing here plays a sound: CI has no audio device, so a test that needed one
+// would gate nothing — `attach` puts a handle a caller already has on a bus, and
+// that is the seam this whole suite runs through.
+use audio_bus;
+use graphics;
+
+fn a_mixer() -> audio_bus::Mixer {
+  m = audio_bus::mixer();
+  _ = audio_bus::add(m, "music", audio_bus::MASTER, 0.5);
+  _ = audio_bus::add(m, "sfx", audio_bus::MASTER, 0.8);
+  _ = audio_bus::add(m, "steps", "sfx", 0.5);
+  m
+}
+
+fn test_a_gain_is_the_product_of_the_chain() {
+  m = a_mixer();
+  assert(audio_bus::gain(m, audio_bus::MASTER) == 1.0, "the master is its own level");
+  assert(audio_bus::gain(m, "music") == 0.5, "0.5 under a master of 1.0");
+  assert(audio_bus::gain(m, "steps") == 0.4, "0.5 * 0.8 = 0.4, got {audio_bus::gain(m, \"steps\")}");
+  _ = audio_bus::set_volume(m, audio_bus::MASTER, 0.5);
+  assert(audio_bus::gain(m, "steps") == 0.2, "and the master moves the whole tree");
+  assert(audio_bus::volume(m, "steps") == 0.5, "…without touching the bus's OWN level");
+}
+
+fn test_a_bus_nobody_declared_is_silence() {
+  m = a_mixer();
+  assert(audio_bus::gain(m, "voices") == 0.0,
+         "a missing bus answers silence — an answer a caller can hear");
+  assert(!audio_bus::set_volume(m, "voices", 0.5), "and cannot be turned up");
+  assert(!audio_bus::add(m, "steps", "sfx", 1.0), "a name is not handed out twice");
+  assert(!audio_bus::add(m, "reverb", "nowhere", 1.0), "nor is a bus hung off nothing");
+}
+
+fn test_a_voice_is_its_own_level_times_its_bus() {
+  m = a_mixer();
+  assert(audio_bus::attach(m, 7, "steps", 0.5), "a handle a caller already has");
+  assert(audio_bus::level(m, 7) == 0.2, "0.5 * 0.5 * 0.8 = 0.2, got {audio_bus::level(m, 7)}");
+  _ = audio_bus::set_volume(m, "sfx", 0.4);
+  assert(audio_bus::level(m, 7) == 0.1, "…and follows a bus two levels up");
+  assert(audio_bus::level(m, 99) == 0.0, "a sink nobody attached is not on the mixer");
+  assert(!audio_bus::attach(m, 3, "voices", 1.0), "and a bus nobody declared takes none");
+}
+
+fn test_a_duck_restores_exactly() {
+  // The one thing this package exists to get right.  0.35 is chosen because
+  // dividing the gain back out is EXACTLY where the drift would be visible:
+  // 0.35 has no exact binary form, so a restore that computes cannot land.
+  m = a_mixer();
+  _ = audio_bus::set_volume(m, "music", 0.35);
+  before = audio_bus::volume(m, "music");
+  for _ in 0..1000 {
+    assert(audio_bus::duck(m, "music", 0.1), "ducked");
+    assert(audio_bus::ducked(m, "music"), "…and says so");
+    assert(audio_bus::unduck(m, "music"), "lifted");
+  }
+  assert(audio_bus::volume(m, "music") == before,
+         "a thousand ducks later it is the SAME number: {audio_bus::volume(m, \"music\")} vs {before}");
+  assert(!audio_bus::ducked(m, "music"), "and nothing is ducking it");
+}
+
+fn test_a_duck_inside_a_duck_comes_home_to_the_original() {
+  m = a_mixer();
+  _ = audio_bus::set_volume(m, "music", 0.9);
+  _ = audio_bus::duck(m, "music", 0.3);
+  _ = audio_bus::duck(m, "music", 0.1);      // a second speaker starts
+  assert(audio_bus::volume(m, "music") == 0.1, "the deeper duck wins while it lasts");
+  assert(audio_bus::unduck(m, "music"), "and one lift is enough");
+  assert(audio_bus::volume(m, "music") == 0.9,
+         "back to the level before ANY duck, got {audio_bus::volume(m, \"music\")}");
+  assert(!audio_bus::unduck(m, "music"), "a second lift finds nothing to lift");
+}
+
+fn test_ducking_a_parent_moves_the_children() {
+  m = a_mixer();
+  _ = audio_bus::attach(m, 11, "steps", 1.0);
+  assert(audio_bus::level(m, 11) == 0.4, "0.8 * 0.5");
+  _ = audio_bus::duck(m, "sfx", 0.5);
+  assert(audio_bus::level(m, 11) == 0.25, "a duck two levels up reaches the voice");
+  _ = audio_bus::unduck(m, "sfx");
+  assert(audio_bus::level(m, 11) == 0.4, "and lifting it puts the voice back exactly");
+}
+
+fn test_a_negative_level_is_silence_not_an_inversion() {
+  m = a_mixer();
+  _ = audio_bus::set_volume(m, "music", -1.0);
+  assert(audio_bus::volume(m, "music") == 0.0, "a negative gain inverts a waveform");
+  _ = audio_bus::duck(m, "sfx", -0.5);
+  assert(audio_bus::volume(m, "sfx") == 0.0, "…and a duck is no different");
+}
+
+fn test_stopping_a_bus_takes_its_children_with_it() {
+  m = a_mixer();
+  _ = audio_bus::attach(m, 1, "music", 1.0);
+  _ = audio_bus::attach(m, 2, "sfx", 1.0);
+  _ = audio_bus::attach(m, 3, "steps", 1.0);
+  assert(audio_bus::under(m, "steps", "sfx"), "steps hangs under sfx");
+  assert(!audio_bus::under(m, "sfx", "steps"), "and not the other way round");
+  assert(audio_bus::stop_bus(m, "sfx") == 2, "sfx and steps, not music");
+  assert(audio_bus::level(m, 3) == 0.0, "a stopped voice is off the mixer");
+  assert(audio_bus::level(m, 1) == 0.5, "and music is untouched");
+  assert(audio_bus::stop_all(m) == 1, "one left, and now none");
+  assert(audio_bus::stop_all(m) == 0, "stopping nothing is not an error");
+}
+
+fn test_detaching_leaves_the_sound_alone() {
+  m = a_mixer();
+  _ = audio_bus::attach(m, 5, "music", 1.0);
+  audio_bus::detach(m, 5);
+  assert(audio_bus::level(m, 5) == 0.0, "the mixer has forgotten it");
+  assert(audio_bus::stop_bus(m, audio_bus::MASTER) == 0, "so a stop no longer reaches it");
+}
+
+fn test_stopping_and_panning_one_voice() {
+  m = a_mixer();
+  _ = audio_bus::attach(m, 4, "music", 1.0);
+  audio_bus::pan(m, 4, -1.0);          // reaches graphics; nothing here to read back
+  audio_bus::pan(m, 404, -1.0);        // …and a sink nobody attached is a no-op
+  audio_bus::stop(m, 4);
+  assert(audio_bus::level(m, 4) == 0.0, "a stopped voice is off the mixer");
+  audio_bus::stop(m, 4);               // stopping it twice is not an error
+  assert(audio_bus::stop_all(m) == 0, "and it is not counted again");
+}
+
+fn test_a_cycle_answers_silence_rather_than_hanging() {
+  // A caller can build one, so the answer has to be a number.
+  m = audio_bus::mixer();
+  _ = audio_bus::add(m, "a", audio_bus::MASTER, 1.0);
+  _ = audio_bus::add(m, "b", "a", 1.0);
+  m.buses["a"].bs_parent = "b";
+  assert(audio_bus::gain(m, "a") == 0.0, "a chain that will not end is silence");
+  assert(!audio_bus::under(m, "a", audio_bus::MASTER), "and reaches no ancestor");
+}
+
+fn test_playing_without_a_device_attaches_nothing() {
+  // `audio_load` needs an output stream, and CI has none — so this is the path
+  // every machine that gates this package takes.  The claim is that a sound
+  // which never started leaves no voice behind: a mixer whose list fills up with
+  // handles that are not playing reports a scene as noisy when it is silent.
+  m = a_mixer();
+  clip = graphics::audio_load("no-such-file.wav");
+  sink = audio_bus::play(m, "music", clip, 1.0);
+  assert(sink < 0, "no clip, no sound");
+  assert(audio_bus::stop_all(m) == 0, "and no voice on the mixer");
+  assert(audio_bus::play(m, "voices", clip, 1.0) < 0, "a bus nobody declared plays nothing");
+}

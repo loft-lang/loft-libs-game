@@ -107,28 +107,18 @@ exactly 2 000 000 of them.
 |---|---|
 | interpreter | ✅ 13/13, **warning-clean under `LOFT_DENY_WARNINGS=1`** |
 | `--native` | ✅ 13/13, identical results |
-| `--native-wasm` | ⚠ **not yet exercised** — `loft test --native-wasm` is accepted and silently runs the interpreter, reporting *"ran on the interpreter only"* in a banner that reads as a hint. [loft#964](https://github.com/loft-lang/loft/issues/964) |
+| `--native-wasm` | ✅ a clock program builds and answers what the interpreter answers under wasmtime |
 | `--html` | ✅ **measured, not argued** — a browser page's answers are identical to the interpreter's, line for line. See below |
 
-### ⚠ `--html` was `n/a` on an argument, and it is a measurement now
+### `--html`, measured
 
-This row read *"n/a — pure loft, no `#native` bindings, so no bridge is involved."*
-The reasoning is sound and it is not evidence: an `--html` build can diverge from
-every other target with no bridge involved at all, which is what
-[loft#950](https://github.com/loft-lang/loft/issues/950) is. And this package has one
-call that could plausibly differ there — `ease_fraction` is `1 − exp(−k·dt)`, and
-`exp` is a builtin.
-
-Measured by **moros**, the consumer that ships `--html` pages, in
-`probe/e1/ease_html.loft`: one program printing the composition identity, the four
-`k` its camera eases at after 120 fixed ticks, `ease_fraction` including the paused
-frame, and the angle half — run on the interpreter, then built with `--html` and
-driven headless off `file://`. **All 11 lines identical**, including
-`compose one 0.9975212478 sixty 0.9975212478 spread 0` — the composition property
-holds in a browser to the bit.
-
-⚠ The page is 386 KB, so this is also the cheapest existing check that the package
-carries nothing a browser cannot take.
+The package is pure loft with no `#native` bindings, and its one call that could
+plausibly differ in a browser is `ease_fraction` (`1 − exp(−k·dt)`; `exp` is a builtin).
+So the browser column is a measurement: moros's `probe/e1/ease_html.loft` prints the
+composition identity, the four `k` its camera eases at after 120 fixed ticks,
+`ease_fraction` including a paused frame, and the angle half, on the interpreter and
+as an `--html` page driven headless — **all 11 lines identical**, including
+`compose one 0.9975212478 sixty 0.9975212478 spread 0`.
 
 ```sh
 loft test                                        # interpreter
@@ -140,12 +130,10 @@ LOFT_DENY_WARNINGS=1 loft --interpret --tests tests   # what CI runs
 does not read its `_clk`, which is its contract rather than an oversight, so
 the parameter is underscored to say so at the one site that means it — where
 an `.allow_warnings` file would have switched the gate off for every future
-warning as well (0.1.1).
+warning as well.
 
-The worked-example linkage is checked by dryopea's `scripts/examples.sh`
-until this package is published and the ecosystem indexer covers it:
+The worked-example linkage — every `// Example: @FIX-0NN` naming a test that carries
+it — is checked by loft's examples gate (`make examples-preflight REPO=<this repo>` in a
+loft checkout), the same gate the library CI runs.
 
-```sh
-EXAMPLES_TEST_ROOTS=<this>/tests EXAMPLES_CITE_ROOTS=<this>/src \
-    bash <dryopea>/scripts/examples.sh
-```
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
