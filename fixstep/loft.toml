@@ -1,6 +1,6 @@
 [package]
 name    = "fixstep"
-version = "0.1.2"
+version = "0.1.3"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "A fixed simulation step in exact integer time — clock, bank, one-shot timer"
