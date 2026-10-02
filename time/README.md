@@ -43,7 +43,7 @@ s = "{d1:date}";   // 2026-07-08   ·  "{d1:iso}" · "{d1:time}" · "{d1}" · "{
 - **Operators**: `< <= > >= == !=`; `dt - dt -> Duration`; `dt + Duration ->
   DateTime`; `dt - Duration -> DateTime` (also `dt.minus(Duration)`).
 - **Duration**: `milliseconds seconds minutes hours days weeks`; `+ - *`,
-  comparisons, `negate`, `total_millis/seconds/minutes/hours/days`.
+  comparisons, `-span` (also `span.negate()`), `total_millis/seconds/minutes/hours/days`.
 - **Format**: `{dt}` `{dt:date}` `{dt:time}` `{dt:seconds}` `{dt:iso}`
   `{dt:wday}` `{dt:month}` · `{dur}` → `[-]H:MM:SS`.
 - **Nullability**: a `value struct` has no null, so a fallible parse cannot
