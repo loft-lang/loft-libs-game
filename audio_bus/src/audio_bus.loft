@@ -104,8 +104,9 @@ pub fn gain(m: const Mixer, name: text) -> float {
     if gn_at == "" { return gn_g }
     gn_b = m.buses[gn_at];
     if gn_b == null { return 0.0 }
-    gn_g *= gn_b.bs_volume;
-    gn_at = gn_b.bs_parent;
+    // `gn_b` is present past the check above; `?` says so to the type.
+    gn_g *= gn_b.bs_volume?;
+    gn_at = gn_b.bs_parent?;
   }
   // A parent chain that will not end. Answer silence rather than looping: the
   // caller built a cycle, and a mixer that hangs says less about it than a bus
@@ -262,7 +263,7 @@ pub fn under(m: const Mixer, name: text, ancestor: text) -> boolean {
     if un_at == "" { return false }
     un_b = m.buses[un_at];
     if un_b == null { return false }
-    un_at = un_b.bs_parent;
+    un_at = un_b.bs_parent?;
   }
   false
 }
