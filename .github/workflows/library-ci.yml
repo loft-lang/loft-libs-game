@@ -19,4 +19,4 @@ jobs:
       contents: read
       pull-requests: read
     with:
-      packages: '["fixstep", "input", "time"]'
+      packages: '["fixstep", "input", "time", "audio_bus"]'

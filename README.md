@@ -40,7 +40,7 @@ games don't have to chase mutually-compatible point versions across
 | `input/` | input | (planned — wraps `graphics::poll_events` into action state + bindings) |
 | `particles/` | particles | (planned, lib_plans/future/27) |
 | `physics_2body/` | physics_2body | (planned, lib_plans/future/26) |
-| `audio_bus/` | audio_bus | (planned — game-side mixer above graphics's raw audio surface) |
+| `audio_bus/` | audio_bus | ✅ 0.1.0 — buses that multiply, and a duck that restores exactly (needs `graphics` 0.9.0) |
 
 ## License
 
