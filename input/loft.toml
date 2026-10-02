@@ -1,6 +1,6 @@
 [package]
 name    = "input"
-version = "0.2.2"
+version = "0.2.3"
 loft    = ">=2026.7.2"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
@@ -11,4 +11,4 @@ description = "Game input for loft — action/axis bindings resolved to per-tick
 entry = "src/input.loft"
 
 [dependencies]
-graphics = ">=0.1"
+graphics = ">=0.9.6"

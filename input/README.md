@@ -23,17 +23,18 @@ This library wraps the polled primitives `graphics` exposes
   down cancelling to centre (the Unity / Godot convention).
 
 ```loft
-use input;
+use graphics::*;    // the key codes: KEY_SPACE, KEY_LEFT, …
+use input::*;
 
-bindings = input::Bindings{
+bindings = Bindings{
   bnd_actions: [
-    input::ActionBinding{ab_name: "jump", ab_keys: [KEY_SPACE, KEY_UP]},
+    ActionBinding{ab_name: "jump", ab_keys: [KEY_SPACE, KEY_UP]},
   ],
   bnd_axes: [
-    input::AxisBinding{ax_name: "horizontal", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT},
+    AxisBinding{ax_name: "horizontal", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT},
   ]
 };
-state = input::input_new(bindings);
+state = input_new(bindings);
 
 // ...once per frame, and only once:
 state.input_tick();
@@ -77,7 +78,8 @@ how you replay input that never came from a keyboard.
   `mouse_button_just_pressed`, `mouse_button_just_released`; masks
   `MB_LEFT`, `MB_RIGHT`, `MB_MIDDLE`.
 
-Key codes come from `graphics` (`KEY_SPACE` = 32, `KEY_A` = 97, …); a binding
+Key codes come from `graphics` (`KEY_SPACE` = 32, `KEY_A` = 97, …), public from
+graphics 0.9.6 on, so `use graphics::*;` brings them in; a binding
 referencing a code outside `0..256` is ignored at query time rather than
 faulting.
 
