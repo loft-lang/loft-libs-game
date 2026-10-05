@@ -62,6 +62,10 @@ fn test_arithmetic() {
     assert(d3 == d2, "add duration reaches the later time");
     back = d1.minus(time::minutes(90));  // subtract a Duration (method)
     assert(back == time::datetime(2026, 7, 8, 10, 30, 0), "minus a duration");
+    assert(d1 - time::minutes(90) == back, "dt - Duration is the same call as dt.minus");
+    assert((d1 - back).total_minutes() == 90 && time::minutes(90) * 2 == time::hours(3),
+           "dt - dt answers a Duration; a Duration scales");
+    assert(back < d1 && d1 >= back && time::minutes(1) < time::hours(1), "both types order");
 }
 
 fn test_duration() {
@@ -71,6 +75,8 @@ fn test_duration() {
     assert(time::weeks(1).total_days() == 7, "week is 7d");
     assert((time::hours(2) * 3) == time::hours(6), "scale duration");
     assert(time::minutes(90).negate().total_minutes() == -90, "negate");
+    span = time::minutes(90);
+    assert((-span).total_minutes() == -90, "unary - is operator negate");
     assert("{time::minutes(90)}" == "1:30:00", "dur fmt {time::minutes(90)}");
     assert("{time::hours(25)}" == "25:00:00", "dur >24h");
     assert("{time::minutes(-90)}" == "-1:30:00", "negative dur fmt");

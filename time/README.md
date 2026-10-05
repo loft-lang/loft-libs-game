@@ -25,7 +25,7 @@ element (a `vector<DateTime>` costs the same as `vector<integer>`), yet they are
 a distinct type: `dt + 5` is a compile error, only `dt + hours(2)` steps a time.
 
 ```loft
-use time;
+use time::*;
 
 d1 = time::datetime(2026, 7, 8, 12, 0, 0);   // or time::date(y, mo, d)
 d2 = "2026-07-08T13:30:00" as DateTime;        // total best-effort parse
@@ -41,9 +41,9 @@ s = "{d1:date}";   // 2026-07-08   ·  "{d1:iso}" · "{d1:time}" · "{d1}" · "{
 - **Read (methods)**: `year month day hour minute second weekday iso_year
   iso_week weekday_name month_name to_millis`.
 - **Operators**: `< <= > >= == !=`; `dt - dt -> Duration`; `dt + Duration ->
-  DateTime`; `dt.minus(Duration)`.
+  DateTime`; `dt - Duration -> DateTime` (also `dt.minus(Duration)`).
 - **Duration**: `milliseconds seconds minutes hours days weeks`; `+ - *`,
-  comparisons, `negate`, `total_millis/seconds/minutes/hours/days`.
+  comparisons, `-span` (also `span.negate()`), `total_millis/seconds/minutes/hours/days`.
 - **Format**: `{dt}` `{dt:date}` `{dt:time}` `{dt:seconds}` `{dt:iso}`
   `{dt:wday}` `{dt:month}` · `{dur}` → `[-]H:MM:SS`.
 - **Nullability**: a `value struct` has no null, so a fallible parse cannot
