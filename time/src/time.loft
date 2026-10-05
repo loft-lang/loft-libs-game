@@ -545,7 +545,10 @@ pub operator to_text(self: Duration, _spec: text) -> text {
 }
 
 // ── conversions (`as`) ──
+// `dt as integer`: the point in time as milliseconds since the epoch, UTC.
 pub operator to_integer(self: DateTime) -> integer { self.ms }
+// `ms as DateTime`: milliseconds since the epoch, UTC, as a point in time — the way back from
+// `as integer`, and the checked path from `parse` (see FALLIBILITY above).
 pub operator to_date_time(self: integer) -> DateTime { DateTime { ms: self } }
 // text -> DateTime: a TOTAL best-effort parse (bad input -> epoch); see the
 // FALLIBILITY note above for the checked path via `parse`.
