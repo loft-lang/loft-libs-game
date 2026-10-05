@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Build a bus tree, move a whole subtree with one write, and duck a bus so it comes back exactly.
+//
+// `audio_bus` decides how loud; `graphics` plays the sounds.  A bus is a number that
+// multiplies, arranged in a tree under `MASTER`, and a voice is heard at its own level times
+// the gain of every bus above it — so one write to `sfx` moves every effect, and everything
+// under it.  Nothing below plays a sound: `attach` puts a handle a caller already holds on a
+// bus, which is also how this guide runs on a machine with no audio device.
+use audio_bus::*;
+use graphics;
+
+fn main() {
+  m = mixer();
+  _ = add(m, "music", MASTER, 0.5);
+  _ = add(m, "sfx", MASTER, 0.8);
+  _ = add(m, "steps", "sfx", 0.5);          // a bus under a bus
+  // `steps` is heard at its own 0.5 times `sfx`'s 0.8 times `MASTER`'s 1.0.
+  println("music {gain(m, "music")}, steps {gain(m, "steps")}");
+  assert(gain(m, "music") == 0.5 && gain(m, "steps") == 0.4, "a gain is the product of its chain");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  one_write_moves_a_subtree();
+  a_duck_comes_home_exactly();
+  what_silence_means();
+  stopping_a_bus();
+}
+
+// That prints:
+//
+//     music 0.5, steps 0.4
+//
+// ## One write moves a subtree
+//
+// `set_volume` changes one bus's own level and re-applies every voice under it.  A voice keeps
+// its OWN level beside the bus's, so the level its sink is set to (`level`) is recomputed
+// rather than scaled — a derived number cannot be un-multiplied.
+
+fn one_write_moves_a_subtree() {
+  m = mixer();
+  _ = add(m, "sfx", MASTER, 0.8);
+  _ = add(m, "steps", "sfx", 0.5);
+  _ = attach(m, 7, "steps", 0.5);           // a sink played elsewhere, at its own 0.5
+  assert(level(m, 7) == 0.2, "0.5 × 0.5 × 0.8");
+  _ = set_volume(m, "sfx", 0.5);            // the effects slider
+  assert(volume(m, "sfx") == 0.5 && gain(m, "steps") == 0.25, "steps follows sfx");
+  assert(level(m, 7) == 0.125, "0.5 × 0.5 × 0.5");
+  println("subtree : sfx 0.8 -> 0.5 moves a footstep from 0.2 to 0.125");
+}
+
+// ## A duck comes home exactly
+//
+// `duck` remembers the level it replaces and `unduck` writes that number back, so nothing is
+// computed on the way home and nothing can drift — 0.35 has no exact binary form and still
+// comes back on the same bits.  A duck inside a duck keeps the ORIGINAL level, so a second
+// speaker starting does not turn the first one's restore into a guess.  An `unduck` that finds
+// nothing to lift answers false: a duck and its lift have come apart somewhere.
+
+fn a_duck_comes_home_exactly() {
+  m = mixer();
+  _ = add(m, "music", MASTER, 0.35);
+  _ = duck(m, "music", 0.1);                // speech starts
+  _ = duck(m, "music", 0.05);               // a second line over the first
+  assert(ducked(m, "music") && volume(m, "music") == 0.05, "ducked twice");
+  assert(unduck(m, "music"), "one lift");
+  assert(volume(m, "music") == 0.35 && !ducked(m, "music"), "home to the original level");
+  assert(!unduck(m, "music"), "nothing left to lift");
+  println("duck    : 0.35 -> 0.1 -> 0.05 -> 0.35, exactly");
+}
+
+// ## What silence means
+//
+// A bus nobody declared is SILENCE, never full volume: `gain` answers 0.0, `set_volume` and
+// `duck` answer false, and `play` refuses with -1 before it touches the audio device.  A
+// negative level is clamped to 0.0, because a negative gain inverts a waveform rather than
+// quietening it.
+
+fn what_silence_means() {
+  m = mixer();
+  assert(gain(m, "musci") == 0.0, "a typo is silence");
+  assert(!set_volume(m, "musci", 0.5) && !duck(m, "musci", 0.1), "and changes nothing");
+  assert(play(m, "musci", 1) == -1, "play refuses an unknown bus");
+  _ = add(m, "music", MASTER, 0.5);
+  _ = set_volume(m, "music", -0.5);
+  assert(volume(m, "music") == 0.0, "clamped, not inverted");
+  println("silence : an unknown bus answers 0.0; a negative level is 0.0");
+}
+
+// ## Stopping a bus
+//
+// `stop_bus` stops every voice on a bus AND on the buses under it, and answers how many — "the
+// scene is over" is a claim worth checking.  `under` is the tree question it asks.
+
+fn stopping_a_bus() {
+  m = mixer();
+  _ = add(m, "music", MASTER, 0.5);
+  _ = add(m, "sfx", MASTER, 0.8);
+  _ = add(m, "steps", "sfx", 0.5);
+  _ = attach(m, 1, "music");
+  _ = attach(m, 2, "sfx");
+  _ = attach(m, 3, "steps");
+  assert(under(m, "steps", "sfx") && !under(m, "music", "sfx"), "the tree");
+  assert(stop_bus(m, "sfx") == 2, "sfx and steps, not music");
+  assert(level(m, 1) == 0.5 && level(m, 3) == 0.0, "music plays on; a stopped voice is gone");
+  println("stop    : stop_bus(sfx) stops 2 of 3");
+}

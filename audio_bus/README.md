@@ -10,7 +10,7 @@ loft install audio_bus
 ```
 
 ```loft
-use audio_bus;
+use audio_bus::(mixer, add, play, duck, unduck, MASTER);
 use graphics;
 
 fn main() {
@@ -98,10 +98,11 @@ Everything here is pure loft over `graphics`' audio calls, so it runs wherever
 bridge carries `loop`, `pan`, `seek` and `stop-all` as of @PLN146 E2). The suite is
 green on both desktop backends.
 
-⚠ **Needs `graphics` 0.9.0**, which is where `audio_set_pan`, `audio_seek`,
-`audio_stop_all` and `audio_play`'s `looping` / `pan` / `start` arrive. Until that
-release is in the registry this package cannot resolve its dependency there, and
-its CI job says so.
+Needs `graphics` 0.9.0 or later, which is where `audio_set_pan`, `audio_seek`,
+`audio_stop_all` and `audio_play`'s `looping` / `pan` / `start` arrive.
+
+A worked walk through the tree, the duck and what silence means is the guide,
+[`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 
 ## License
 
