@@ -1,7 +1,7 @@
 [package]
 name    = "audio_bus"
-version = "0.1.0"
-loft    = ">=0.8"
+version = "0.1.1"
+loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "A mixer for game audio — buses that multiply, and a duck that restores exactly"
 categories  = ["game", "audio"]
