@@ -25,7 +25,7 @@ element (a `vector<DateTime>` costs the same as `vector<integer>`), yet they are
 a distinct type: `dt + 5` is a compile error, only `dt + hours(2)` steps a time.
 
 ```loft
-use time;
+use time::*;
 
 d1 = time::datetime(2026, 7, 8, 12, 0, 0);   // or time::date(y, mo, d)
 d2 = "2026-07-08T13:30:00" as DateTime;        // total best-effort parse
