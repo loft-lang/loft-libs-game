@@ -37,7 +37,7 @@ pub struct Bus {
   bs_name: text,
   /// The bus above this one. `""` is the top — the level everything passes
   /// through, so a master volume is `set_volume(m, MASTER, x)`.
-  bs_parent: text = "",
+  pub bs_parent: text = "",
   /// This bus's own level, 0.0 to 1.0.
   bs_volume: float = 1.0,
   /// What `bs_volume` was before the current duck, or `-1.0` when nothing is
@@ -58,7 +58,7 @@ pub struct Voice {
 
 /// The mixer: the bus tree, and every voice currently on it.
 pub struct Mixer {
-  buses: hash<Bus[bs_name]>,
+  pub buses: hash<Bus[bs_name]>,
   voices: hash<Voice[vc_sink]>,
 }
 

@@ -1,6 +1,6 @@
 [package]
 name    = "input"
-version = "0.2.5"
+version = "0.2.6"
 loft    = ">=2026.10.0"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
