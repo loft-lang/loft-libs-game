@@ -121,11 +121,11 @@ pub struct Timer {
     // Base units spent since it was armed.  Always in `[0, total)`
     // between calls: the call that reaches `total` fires and disarms,
     // so a spent timer is an unarmed one rather than a saturated one.
-    spent: integer,
+    pub spent: integer,
 
     // The whole duration, in base units.  Zero means nothing is
     // running.
-    total: integer,
+    pub total: integer,
 }
 
 // A timer nobody has armed.

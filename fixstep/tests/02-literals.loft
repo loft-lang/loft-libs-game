@@ -1,0 +1,18 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A `Timer` and a `TickClock` are built by partial literal OUTSIDE this library — the zero
+// defaults are part of their contract (`tick_timer.loft` § Timer, `tick_clock.loft` § the rate):
+// an omitted `total` is an unarmed timer, an omitted rate runs unscaled.  So every field is `pub`.
+use fixstep::*;
+
+fn test_a_defaulted_timer_is_unarmed() {
+  t = Timer { };
+  assert(!timer_running(t), "a defaulted timer is not running");
+}
+
+fn test_a_clock_from_a_partial_literal_runs_unscaled() {
+  c = TickClock { step: 10 };
+  assert(clock_advance(c, 35) == 3, "35 units buy 3 steps of 10, got a different count");
+  assert(clock_rate_den(c) == 1, "and reads as unscaled");
+}

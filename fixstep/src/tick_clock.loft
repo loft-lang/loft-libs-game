@@ -163,13 +163,13 @@ pub struct TickClock {
     // One simulation step, in base units.  Never zero — `clock_new`
     // refuses, because a zero step makes `clock_advance` a division by
     // zero and "pause" is a rate of 0 rather than a step of 0 (L4).
-    step: integer,
+    pub step: integer,
 
     // Base units not yet spent as whole steps.  ⚠ **The remainder is
     // KEPT**, which is the property plan 19 P0 measured and the one no
     // measurement in this repo would survive losing: a frame that
     // delivers less than a step takes no step and banks all of it.
-    banked: integer,
+    pub banked: integer,
 
     // How fast simulated time runs against the wall, as `num / den`
     // (L4).  Pause is `0 / 1`; half-speed `1 / 2`; triple `3 / 1`.
@@ -183,8 +183,8 @@ pub struct TickClock {
     // defaulted `0 / 0` is *the behaviour you already had* —
     // `plans/26` § The two rules under all of it — so the neutral
     // default is not merely safe, it is the rule stated as data.
-    rate_num: integer,
-    rate_den: integer,
+    pub rate_num: integer,
+    pub rate_den: integer,
 
     // Wall time not yet converted into simulated time, in `den`-ths of
     // a base unit.  Always in `[0, den)`.
@@ -195,7 +195,7 @@ pub struct TickClock {
     // Folding them — scaling `banked` by `den` — would make
     // `clock_banked`'s unit change with the rate, and it is a
     // save/restore value.
-    rate_carry: integer,
+    pub rate_carry: integer,
 
     // The last absolute wall reading `clock_pump` saw, and whether it
     // has seen one at all.
@@ -204,8 +204,8 @@ pub struct TickClock {
     // because a wall clock may legitimately read 0 — and a clock whose
     // first pump answered `now` worth of ticks would open a server
     // with the whole uptime as one burst.
-    pump_at: integer,
-    pumped:  boolean,
+    pub pump_at: integer,
+    pub pumped:  boolean,
 }
 
 // A clock ticking every `step` base units.
