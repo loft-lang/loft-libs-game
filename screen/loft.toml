@@ -1,0 +1,19 @@
+[package]
+name    = "screen"
+version = "0.1.0"
+loft    = ">=2026.10.0"
+repository = "loft-libs-game"
+description = "A small frame on the machine's screen, scaled up, with the keys of its window — one API on a desktop and a device"
+categories  = ["game", "graphics"]
+
+# ⚠ FIRST release, so both floors are this release itself.
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+[library]
+entry = "src/screen.loft"
+
+# The screen is C99 loft builds with `cc` (`clang` for wasm): an X11 window (libX11 opened at
+# run time) on a desktop, the BSP display on a Tanmatsu, none elsewhere yet.
+[c]
+shim = "c/screen.c"

@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// screen — show a small frame on the machine's screen, scaled up by a whole number, and read
+// the keys of the window it is shown in.  One API on every machine; the C part (c/screen.c)
+// has one section per platform:
+//
+//   - a desktop with X11: a window of `width * scale` by `height * scale`;
+//   - a Tanmatsu: the board's display, the frame rotated into its portrait panel and centred;
+//   - elsewhere (a browser, Windows, macOS): none yet, so `open` answers false.
+//
+// A frame is RGB565 values, one per pixel, row by row — what `tiles::pixels` answers — so a
+// game draws with `tiles` and shows the result here.  A screen without keys of its own (a
+// Tanmatsu, whose keys `input::input_tick_device` reads) answers `has_keys()` false, and a
+// game then reads its keys there: one program, asking what the machine has.
+
+fn sc_open(width: integer, height: integer, scale: integer, mode: integer, title: text) -> integer;
+#c "sc_open" "int64_t(int64_t, int64_t, int64_t, int64_t, const char*)"
+fn sc_close();
+#c "sc_close" "void(void)"
+fn sc_show(pixels: const vector<i32>, width: integer, height: integer);
+#c "sc_show" "void(const int32_t*, int64_t, int64_t, int64_t)"
+fn sc_poll(wait_ms: integer) -> integer;
+#c "sc_poll" "int64_t(int64_t)"
+fn sc_has_keys() -> integer;
+#c "sc_has_keys" "int64_t(void)"
+fn sc_key(code: integer) -> integer;
+#c "sc_key" "int64_t(int64_t)"
+fn sc_shown(x: integer, y: integer) -> integer;
+#c "sc_shown" "int64_t(int64_t, int64_t)"
+fn sc_width() -> integer;
+#c "sc_width" "int64_t(void)"
+fn sc_height() -> integer;
+#c "sc_height" "int64_t(void)"
+
+/// Open the screen for frames of `width` by `height` pixels, each shown as a `scale` by
+/// `scale` block.  On a desktop that is a window of that size titled `title`; on a device it is
+/// the whole display, the frame centred.  `offscreen` keeps only the scaled image in memory —
+/// for tests, and for a machine with no screen.  False where this machine has no screen (no
+/// display, a browser build).  Opening again closes the screen that was open.
+pub fn open(width: integer, height: integer, scale: integer = 1, title: text = "loft",
+            offscreen: boolean = false) -> boolean {
+  sc_open(width, height, scale, if offscreen { 1 } else { 0 }, title) != 0
+}
+
+/// Show a frame: `width * height` RGB565 values, row by row, as `tiles::pixels` answers them.
+/// A frame with fewer values than that shows nothing.
+pub fn show(pixels: const vector<i32>, width: integer, height: integer) {
+  sc_show(pixels, width, height);
+}
+
+/// Take what happened since the last call — keys, the window being closed — waiting up to
+/// `wait_ms` milliseconds for something to happen.  False once the window was closed.
+pub fn poll(wait_ms: integer = 0) -> boolean {
+  sc_poll(wait_ms) != 0
+}
+
+/// Does this screen have keys of its own (a desktop window)?  A device's keys are `input`'s.
+pub fn has_keys() -> boolean {
+  sc_has_keys() != 0
+}
+
+/// Which of the window's keys are down, by graphics' key codes (`KEY_W` = 119, `KEY_UP` =
+/// 128, ...): 256 flags, the form `input::input_tick_from_state` takes.  All false where the
+/// screen has no keys.
+pub fn keys() -> vector<boolean> {
+  out: vector<boolean> = [];
+  for k in 0..256 { out += [sc_key(k) != 0]; }
+  out
+}
+
+/// The RGB565 value shown at screen pixel (x, y), or -1 outside the screen — what a test
+/// reads back.
+pub fn shown(x: integer, y: integer) -> integer {
+  sc_shown(x, y)
+}
+
+/// The size of the screen in pixels: the window's, or the device's display turned landscape.
+pub fn width() -> integer {
+  sc_width()
+}
+
+pub fn height() -> integer {
+  sc_height()
+}
+
+/// Close the screen.
+pub fn close() {
+  sc_close();
+}
