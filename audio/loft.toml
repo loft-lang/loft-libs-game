@@ -1,0 +1,21 @@
+[package]
+name    = "audio"
+version = "0.1.0"
+loft    = ">=2026.10.0"
+repository = "loft-libs-game"
+description = "Clips, voices and one mix: the same sound on a PC and on a 32-bit device"
+categories  = ["game", "audio"]
+
+# ⚠ FIRST release, so both floors are this release itself.
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+[library]
+entry = "src/audio.loft"
+
+# The engine is C99 the package ships and loft builds itself with `cc` (and `clang` for the two
+# wasm targets): `c/audio_engine.c`, with OGG Vorbis by the vendored stb_vorbis
+# (`c/vendor/stb_vorbis`, public domain / MIT) on every target but wasm.  Bound by the `#c`
+# declarations in src/audio.loft.  No Rust crate, no rustc, no wasm bridge.
+[c]
+shim = "c/audio_engine.c"

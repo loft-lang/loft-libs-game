@@ -41,6 +41,7 @@ games don't have to chase mutually-compatible point versions across
 | `particles/` | particles | (planned, lib_plans/future/27) |
 | `physics_2body/` | physics_2body | (planned, lib_plans/future/26) |
 | `audio_bus/` | audio_bus | ✅ buses that multiply, and a duck that restores exactly |
+| `audio/` | audio | ✅ clips, voices and one mix — the engine and its render, the same on every target |
 
 ## License
 

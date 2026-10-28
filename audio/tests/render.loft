@@ -1,0 +1,198 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The engine's mix, read back through `render`.  Every expected sample is computed by hand in
+// the cell's comment.  The clip values are binary fractions and the pans the two edges, where
+// the gains are exactly 1 and 0, so the arithmetic is exact: a 16-bit sample is
+// round(s * 32767), halves away from zero (0.5 -> 16383.5 -> 16384, -0.25 -> -8192).
+// Output rate 8000 and clips at 8000, so one clip frame is one output frame, except where a
+// cell says otherwise.  Each cell starts from `init`, which stops every voice.
+use audio;
+
+// Every other sample, from `start`: the left channel (0) or the right (1) as text.
+fn side(out: const vector<i32>, ch: integer) -> text {
+  t = "";
+  i = ch;
+  while i < len(out) {
+    t += "{out[i] ?? -99999},";
+    i += 2;
+  }
+  t
+}
+
+fn clip(samples: const vector<single>) -> integer {
+  audio::load_samples(samples, 8000) ?? 0
+}
+
+fn main() {
+  audio::init(8000);
+  assert(audio::rate() == 8000, "the output rate");
+}
+
+// Hard left (pan -1): the left gain is cos 0 = 1, the right sin 0 = 0.  The clip ends after
+// four frames and the voice with it.
+fn test_hard_left() {
+  audio::init(8000);
+  c = clip([0.5f, -0.25f, 1.0f, 0.0f]);
+  v = audio::play(c, 1.0, false, -1.0) ?? 0;
+  out = audio::render(6);
+  assert(side(out, 0) == "16384,-8192,32767,0,0,0,", "left: {side(out, 0)}");
+  assert(side(out, 1) == "0,0,0,0,0,0,", "right: {side(out, 1)}");
+  assert(!audio::playing(v), "a clip that does not loop ends its voice");
+}
+
+// Hard right at volume 0.5: 0.25 -> 8192, -0.125 -> -4096, 0.5 -> 16384, 0 -> 0 on the right.
+fn test_hard_right_half_volume() {
+  audio::init(8000);
+  c = clip([0.5f, -0.25f, 1.0f, 0.0f]);
+  audio::play(c, 0.5, false, 1.0);
+  out = audio::render(4);
+  assert(side(out, 1) == "8192,-4096,16384,0,", "right: {side(out, 1)}");
+  assert(side(out, 0) == "0,0,0,0,", "left: {side(out, 0)}");
+}
+
+// A mono clip at the centre is cos(pi/4) = 0.70710677 on each side: 0.25 -> 5792.44 -> 5792,
+// 0.75 -> 17377.32 -> 17377 (measured as single arithmetic does it).
+fn test_centre_pan_is_equal_power() {
+  audio::init(8000);
+  audio::play(clip([0.25f, 0.75f]), 1.0);
+  out = audio::render(2);
+  assert(side(out, 0) == "5792,17377,", "left: {side(out, 0)}");
+  assert(side(out, 1) == "5792,17377,", "right: {side(out, 1)}");
+}
+
+// Two full-scale voices sum to 2 and -2, which clamp to the 16-bit edge.
+fn test_sum_clamps() {
+  audio::init(8000);
+  up = clip([1.0f]);
+  down = clip([-1.0f]);
+  audio::play(up, 1.0, false, -1.0);
+  audio::play(up, 1.0, false, -1.0);
+  first = audio::render(1);
+  audio::play(down, 1.0, false, -1.0);
+  audio::play(down, 1.0, false, -1.0);
+  second = audio::render(1);
+  assert(side(first, 0) == "32767,", "2.0 clamps: {side(first, 0)}");
+  assert(side(second, 0) == "-32767,", "-2.0 clamps: {side(second, 0)}");
+}
+
+// A looping clip of three frames, rendered for seven: 0.25 -> 8192, 0.5 -> 16384,
+// -0.5 -> -16384, then again from the start.
+fn test_looping_wraps() {
+  audio::init(8000);
+  v = audio::play(clip([0.25f, 0.5f, -0.5f]), 1.0, true, -1.0) ?? 0;
+  out = audio::render(7);
+  assert(side(out, 0) == "8192,16384,-16384,8192,16384,-16384,8192,", "left: {side(out, 0)}");
+  assert(audio::playing(v), "a looping voice plays on");
+}
+
+// Starting 2 frames in (2 / 8000 s): -0.5, 1.0, then the end.
+fn test_start_offset() {
+  audio::init(8000);
+  audio::play(clip([0.25f, 0.5f, -0.5f, 1.0f]), 1.0, false, -1.0, 0.00025);
+  out = audio::render(3);
+  assert(side(out, 0) == "-16384,32767,0,", "left: {side(out, 0)}");
+}
+
+// A 4000 Hz clip at an 8000 Hz output moves half a frame per output frame, interpolating:
+// 0, 0.5 (-> 16384), 1.0, then between 1.0 and the silence past the end, 0.5; then done.
+fn test_resampling_interpolates() {
+  audio::init(8000);
+  c = audio::load_samples([0.0f, 1.0f], 4000) ?? 0;
+  audio::play(c, 1.0, false, -1.0);
+  out = audio::render(5);
+  assert(side(out, 0) == "0,16384,32767,16384,0,", "left: {side(out, 0)}");
+}
+
+// A stopped voice's handle acts on nothing, even once its slot plays another voice.
+fn test_a_stale_handle_stops_nothing() {
+  audio::init(8000);
+  c = clip([0.5f, 0.5f, 0.5f, 0.5f]);
+  first = audio::play(c, 1.0) ?? 0;
+  audio::stop(first);
+  second = audio::play(c, 1.0) ?? 0;
+  assert(first != second, "a new handle for the reused slot");
+  audio::stop(first);
+  assert(audio::playing(second), "stopping the old handle left the new voice playing");
+  audio::stop_all();
+  assert(!audio::playing(second), "stop_all stops it");
+}
+
+// Volume, pan and position change between renders: 0.5 -> 16384, at volume 0.5 -> 8192, then
+// panned hard right; a seek to 0 succeeds, one past the end of a clip that does not loop fails.
+fn test_set_volume_pan_and_seek() {
+  audio::init(8000);
+  v = audio::play(clip([0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f]), 1.0, false, -1.0) ?? 0;
+  a = audio::render(1);
+  audio::set_volume(v, 0.5);
+  b = audio::render(1);
+  audio::set_pan(v, 1.0);
+  c = audio::render(1);
+  assert(side(a, 0) == "16384,", "full: {side(a, 0)}");
+  assert(side(b, 0) == "8192,", "half: {side(b, 0)}");
+  assert(side(c, 0) == "0," && side(c, 1) == "8192,", "panned right: {c}");
+  assert(audio::seek(v, 0.0), "a seek inside the clip");
+  assert(!audio::seek(v, 1.0), "a seek past the end of a clip that does not loop");
+}
+
+// play_raw plays once at the centre and releases its samples when it ends.
+fn test_play_raw() {
+  audio::init(8000);
+  v = audio::play_raw([0.25f, 0.75f], 8000, 1.0) ?? 0;
+  out = audio::render(3);
+  assert(side(out, 0) == "5792,17377,0,", "left: {side(out, 0)}");
+  assert(!audio::playing(v), "it ended");
+}
+
+// A 16-bit WAV: 16384 / 32768 = 0.5, -0.5, 0, 32767 / 32768 = 0.99997 -> 32766.0 -> 32766.
+fn test_wav_mono() {
+  audio::init(8000);
+  c = audio::load("mono16.wav") ?? 0;
+  assert(c > 0, "the WAV loads");
+  assert(audio::clip_frames(c) == 4 && audio::clip_rate(c) == 8000 && audio::clip_channels(c) == 1,
+         "4 frames, 8000 Hz, mono");
+  audio::play(c, 1.0, false, -1.0);
+  out = audio::render(4);
+  assert(side(out, 0) == "16384,-16384,0,32766,", "left: {side(out, 0)}");
+}
+
+// A stereo clip at the centre passes each side through: (0.5, -0.25), (0.99997, 0).
+fn test_wav_stereo_centre() {
+  audio::init(8000);
+  c = audio::load("stereo16.wav") ?? 0;
+  assert(audio::clip_channels(c) == 2, "stereo");
+  audio::play(c, 1.0);
+  out = audio::render(2);
+  assert(side(out, 0) == "16384,32766,", "left: {side(out, 0)}");
+  assert(side(out, 1) == "-8192,0,", "right: {side(out, 1)}");
+}
+
+// A 441 Hz tone at 22050 Hz for 0.25 s (5512 frames), peak 0.0625 (ffmpeg's sine is 1/8 of full
+// scale, halved): Vorbis is lossy, so the length and the peak are checked, not the samples.
+fn test_ogg() {
+  if !audio::has_vorbis() { return; }
+  audio::init(22050);
+  c = audio::load("tone.ogg") ?? 0;
+  assert(c > 0, "the OGG loads");
+  assert(audio::clip_rate(c) == 22050 && audio::clip_channels(c) == 1, "22050 Hz mono");
+  n = audio::clip_frames(c);
+  assert(n >= 5500 && n <= 5520, "about 5512 frames, got {n}");
+  audio::play(c, 1.0, false, -1.0);
+  out = audio::render(2000);
+  peak = 0;
+  i = 0;
+  while i < len(out) {
+    s = out[i] ?? 0;
+    if s > peak { peak = s; }
+    i += 2;
+  }
+  assert(peak > 1850 && peak < 2250, "peak near 2048, got {peak}");
+}
+
+fn test_failures_answer_null() {
+  audio::init(8000);
+  assert(!audio::load("no-such-file.wav"), "a missing file");
+  assert(!audio::load_bytes([1 as u8, 2 as u8, 3 as u8]), "bytes that are no clip");
+  assert(!audio::play(9999, 1.0), "an unknown clip");
+  assert(!audio::load_samples([], 8000), "no samples");
+}
