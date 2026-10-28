@@ -11,15 +11,17 @@ loft install audio_bus
 
 ```loft
 use audio_bus::(mixer, add, play, duck, unduck, MASTER);
-use graphics;
+use audio;
 
 fn main() {
+  audio::init(44100);
+  _ = audio::start();                       // the sound device
   m = mixer();
   _ = add(m, "music", MASTER, 0.5);
   _ = add(m, "sfx", MASTER, 0.8);
   _ = add(m, "steps", "sfx", 0.5);          // a bus under a bus
 
-  theme = graphics::audio_load("theme.ogg");
+  theme = audio::load("theme.ogg") ?? 0;
   _ = play(m, "music", theme, 1.0, true);   // looping, at 1.0 * 0.5
 
   // A line of speech starts: pull the music down and put it back after.
@@ -31,7 +33,7 @@ fn main() {
 
 ## Why it exists
 
-`graphics::audio_set_volume` moves **one** sink. A game has a music slider, an
+`audio::set_volume` moves **one** voice. A game has a music slider, an
 effects slider and a master, and every one of them has to reach sounds that were
 started at different times by different code. Without a mixer that means the game
 keeps the list itself — and then keeps a second one for "which of these is music".
@@ -63,7 +65,7 @@ speaker starting must not turn the first one's restore into a guess.
 |---|---|
 | `mixer()` · `add(m, name, parent, volume)` | the tree; `MASTER` is the top |
 | `gain(m, bus)` · `volume(m, bus)` · `set_volume(m, bus, v)` | what multiplies, and what one bus contributes |
-| `play(m, bus, clip, volume, looping, pan, start)` | `graphics::audio_play` on a bus |
+| `play(m, bus, clip, volume, looping, pan, start)` | `audio::play` on a bus; -1 when it did not start |
 | `attach(m, sink, bus, volume)` · `detach(m, sink)` | put a handle you already have on a bus, or take it off |
 | `level(m, sink)` | what that voice's sink is set to |
 | `duck(m, bus, to)` · `unduck(m, bus)` · `ducked(m, bus)` | remember, replace, restore |
@@ -86,20 +88,20 @@ Three answers are worth knowing before you need them:
 Not a DSP graph — no filters, no sends, no compressor. A bus is a multiplication.
 Everything past that belongs to a sound engine, and a 2-D game does not need one.
 
-Not an owner of playback either: `graphics` plays the sounds and this decides how
+Not an owner of playback either: `audio` plays the sounds and this decides how
 loud. That is what `attach` is for, and it is also what lets every rule here be
 tested on a machine with **no audio device at all** — which matters, because CI has
 none, so a suite that needed one would gate nothing.
 
 ## Targets
 
-Everything here is pure loft over `graphics`' audio calls, so it runs wherever
-`graphics` does: the interpreter, `--native`, and a `--html` page (loft's browser
-bridge carries `loop`, `pan`, `seek` and `stop-all` as of @PLN146 E2). The suite is
-green on both desktop backends.
+Everything here is pure loft over the `audio` library, so it runs wherever `audio`
+does: the interpreter, `--native`, the C backend (32-bit RISC-V and x86 included) and a
+Tanmatsu.  The suite reads the mix itself back through `audio::render`, so what a bus
+does is measured as heard.
 
-Needs `graphics` 0.9.0 or later, which is where `audio_set_pan`, `audio_seek`,
-`audio_stop_all` and `audio_play`'s `looping` / `pan` / `start` arrive.
+Needs `audio` 0.2.0 or later.  0.1 played through `graphics`; from 0.2 a clip comes from
+`audio::load`, so a program's clip handles change with it.
 
 A worked walk through the tree, the duck and what silence means is the guide,
 [`docs/01-getting-started.loft`](docs/01-getting-started.loft).

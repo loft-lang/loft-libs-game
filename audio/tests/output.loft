@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The output layer, run for real: `start(true)` opens a device that takes frames at real-time
+// pace from the output thread and plays them into nothing.  A clip of 4410 frames at 44100 Hz
+// (0.1 s) is heard through it and ends, with no `render` from this thread, so the frames the
+// output took are the mix running on its own.  Each wait polls with a 3 s deadline on `ticks`.
+use audio;
+
+// Wait until the output has taken `frames` frames, or 3 s pass; answers whether it did.
+fn wait_frames(frames: integer) -> boolean {
+  deadline = ticks() + 3000000;
+  while audio::output_frames() < frames {
+    if ticks() > deadline { return false; }
+  }
+  true
+}
+
+fn main() {
+  audio::init(44100);
+  samples: vector<single> = [0.5f; 4410];
+  c = audio::load_samples(samples, 44100) ?? 0;
+  assert(c > 0, "the clip loads");
+  assert(audio::start(true), "the null device opens");
+  assert(audio::output_running(), "running");
+  assert(audio::start(true), "starting twice is starting once");
+  v = audio::play(c, 1.0) ?? 0;
+  assert(audio::playing(v), "the voice plays");
+  // The device takes frames in periods; 4410 frames of clip are gone by the time it has taken
+  // 4410 + two periods of 1024 more (it began counting before the voice started).
+  assert(wait_frames(4410 + 2048 + 4410), "the output took frames: {audio::output_frames()}");
+  assert(!audio::playing(v), "the clip was heard to its end by the output alone");
+  audio::stop_output();
+  assert(!audio::output_running(), "stopped");
+  // Stopped, the engine renders again, and a voice started now waits for it.
+  w = audio::play(c, 1.0) ?? 0;
+  out = audio::render(10);
+  assert(out[0] == 11585 && audio::playing(w), "render is the way out again: {out[0]}");
+  audio::stop_all();
+}

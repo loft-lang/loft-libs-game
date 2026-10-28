@@ -1,0 +1,79 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The machine's own key source, fed the bytes a terminal sends (`device_feed`), so it runs
+// with no terminal: what each byte sequence is as a key code, that a press lasts one tick,
+// and that bindings read it as they read a graphics window.  Key codes are graphics': `w` 119,
+// Up 128, Down 129, Left 130, Right 131, Shift 132, Ctrl 133, F1 135, F5 139, F12 146,
+// Delete 147, Page Up 151, Enter 13, Escape 27, Backspace 8.
+use input;
+
+fn state() -> input::InputState {
+  input::input_new(input::Bindings {
+    bnd_actions: [
+      input::ActionBinding { ab_name: "up", ab_keys: [119, 128] },
+      input::ActionBinding { ab_name: "quit", ab_keys: [27] },
+      input::ActionBinding { ab_name: "ok", ab_keys: [13] }
+    ],
+    bnd_axes: [input::AxisBinding { ax_name: "x", ax_neg: 130, ax_pos: 131 }]
+  })
+}
+
+// The keys down after feeding `bytes` and one tick, as their codes in order.
+fn keys_of(bytes: const vector<u8>) -> text {
+  s = state();
+  input::device_feed(bytes);
+  s.input_tick_device();
+  t = "";
+  for k in 0..256 {
+    if s.is_key_down(k) { t += "{k},"; }
+  }
+  t
+}
+
+fn main() {
+  s = state();
+  input::device_feed([119 as u8]);
+  s.input_tick_device();
+  assert(s.is_action_just_pressed("up"), "w is up");
+  s.input_tick_device();
+  assert(!s.is_action_pressed("up"), "a press lasts one tick");
+  assert(s.is_action_just_released("up"), "and is released on the next");
+}
+
+fn test_plain_keys() {
+  assert(keys_of([119 as u8, 97 as u8]) == "97,119,", "w and a: {keys_of([119 as u8, 97 as u8])}");
+  assert(keys_of([13 as u8]) == "13,", "Enter (CR)");
+  assert(keys_of([10 as u8]) == "13,", "Enter (LF)");
+  assert(keys_of([127 as u8]) == "8,", "Backspace (DEL)");
+  assert(keys_of([27 as u8]) == "27,", "a lone ESC is Escape");
+  assert(keys_of([87 as u8]) == "119,132,", "W is Shift + w");
+  assert(keys_of([23 as u8]) == "119,133,", "Ctrl-W is Ctrl + w");
+}
+
+fn test_arrows_and_sequences() {
+  assert(keys_of([27 as u8, 91 as u8, 65 as u8]) == "128,", "ESC [ A is Up");
+  assert(keys_of([27 as u8, 79 as u8, 66 as u8]) == "129,", "ESC O B is Down");
+  assert(keys_of([27 as u8, 91 as u8, 49 as u8, 59 as u8, 53 as u8, 68 as u8]) == "130,",
+         "ESC [ 1 ; 5 D (Ctrl-Left) is Left");
+  assert(keys_of([27 as u8, 91 as u8, 51 as u8, 126 as u8]) == "147,", "ESC [ 3 ~ is Delete");
+  assert(keys_of([27 as u8, 91 as u8, 53 as u8, 126 as u8]) == "151,", "ESC [ 5 ~ is Page Up");
+  assert(keys_of([27 as u8, 79 as u8, 80 as u8]) == "135,", "ESC O P is F1");
+  assert(keys_of([27 as u8, 91 as u8, 49 as u8, 53 as u8, 126 as u8]) == "139,", "ESC [ 15 ~ is F5");
+  assert(keys_of([27 as u8, 91 as u8, 50 as u8, 52 as u8, 126 as u8]) == "146,", "ESC [ 24 ~ is F12");
+  assert(keys_of([27 as u8, 91 as u8, 67 as u8, 119 as u8]) == "119,131,", "Right then w in one read");
+  assert(keys_of([27 as u8, 91 as u8]) == "", "a sequence cut off by the read is dropped");
+}
+
+fn test_bindings_read_the_device() {
+  s = state();
+  input::device_feed([27 as u8, 91 as u8, 68 as u8]);
+  s.input_tick_device();
+  assert(s.get_axis("x") == -1.0, "Left is x -1");
+  input::device_feed([27 as u8, 91 as u8, 68 as u8, 27 as u8, 91 as u8, 67 as u8]);
+  s.input_tick_device();
+  assert(s.get_axis("x") == 0.0, "Left and Right in one tick cancel");
+  input::device_feed([13 as u8]);
+  s.input_tick_device();
+  assert(s.is_action_just_pressed("ok") && !s.is_action_pressed("quit"), "Enter is ok, not quit");
+}

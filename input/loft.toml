@@ -1,6 +1,6 @@
 [package]
 name    = "input"
-version = "0.2.6"
+version = "0.3.0"
 loft    = ">=2026.10.0"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
@@ -9,6 +9,11 @@ description = "Game input for loft — action/axis bindings resolved to per-tick
 
 [library]
 entry = "src/input.loft"
+
+# The machine's own key source (`device_open`, `input_tick_device`): C99 loft builds with `cc`
+# (`clang` for wasm) — the Tanmatsu's BSP keys under ESP-IDF, a raw terminal elsewhere.
+[c]
+shim = "c/keys.c"
 
 [dependencies]
 graphics = ">=0.9.6"
