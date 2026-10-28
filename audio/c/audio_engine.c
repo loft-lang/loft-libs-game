@@ -40,6 +40,33 @@
 
 #define AE_VOICES 64
 
+/* The engine lock.  A device's output layer (`audio_out.c`) mixes on its own thread, so the
+ * clips and voices are touched under one lock: every bound function takes it, and so does the
+ * device's mixer.  A platform with no output layer (wasm) has no second thread and no lock. */
+#if defined(ESP_PLATFORM)
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t ae_lock = NULL;
+#define AE_LOCK() do { if (ae_lock) xSemaphoreTake(ae_lock, portMAX_DELAY); } while (0)
+#define AE_UNLOCK() do { if (ae_lock) xSemaphoreGive(ae_lock); } while (0)
+#elif defined(__wasm__)
+#define AE_LOCK() do { } while (0)
+#define AE_UNLOCK() do { } while (0)
+#else
+#define MINIAUDIO_IMPLEMENTATION
+#define MA_NO_DECODING
+#define MA_NO_ENCODING
+#define MA_NO_GENERATION
+#define MA_NO_RESOURCE_MANAGER
+#define MA_NO_NODE_GRAPH
+#define MA_NO_ENGINE
+#include "vendor/miniaudio/miniaudio.h"
+static ma_mutex ae_lock;
+static int ae_lock_made = 0;
+#define AE_LOCK() do { if (ae_lock_made) ma_mutex_lock(&ae_lock); } while (0)
+#define AE_UNLOCK() do { if (ae_lock_made) ma_mutex_unlock(&ae_lock); } while (0)
+#endif
+
 typedef struct {
     float *samples; /* interleaved, `channels` per frame */
     int64_t frames;
@@ -309,39 +336,39 @@ static int16_t ae_to16(float s) {
     return (int16_t) (v >= 0.0f ? v + 0.5f : v - 0.5f);
 }
 
-/* ── The bound functions ── */
+/* ── The engine, unlocked: every public function below takes the lock and calls one of these. ── */
 
-void ae_init(int64_t rate);
-int64_t ae_rate(void);
-int64_t ae_vorbis(void);
-int64_t ae_load(const uint8_t *bytes, int64_t n);
-int64_t ae_load_pcm(const float *samples, int64_t n, int64_t rate);
-void ae_unload(int64_t clip);
-int64_t ae_clip_frames(int64_t clip);
-int64_t ae_clip_rate(int64_t clip);
-int64_t ae_clip_channels(int64_t clip);
-int64_t ae_play(int64_t clip, const double *p, int64_t n);
-int64_t ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn);
-void ae_stop(int64_t voice);
-void ae_stop_all(void);
-int64_t ae_playing(int64_t voice);
-void ae_set_volume(int64_t voice, const double *p, int64_t n);
-void ae_set_pan(int64_t voice, const double *p, int64_t n);
-int64_t ae_seek(int64_t voice, const double *p, int64_t n);
-void ae_render(int32_t *out, int64_t n);
+static void u_ae_init(int64_t rate);
+static int64_t u_ae_rate(void);
+static int64_t u_ae_vorbis(void);
+static int64_t u_ae_load(const uint8_t *bytes, int64_t n);
+static int64_t u_ae_load_pcm(const float *samples, int64_t n, int64_t rate);
+static void u_ae_unload(int64_t clip);
+static int64_t u_ae_clip_frames(int64_t clip);
+static int64_t u_ae_clip_rate(int64_t clip);
+static int64_t u_ae_clip_channels(int64_t clip);
+static int64_t u_ae_play(int64_t clip, const double *p, int64_t n);
+static int64_t u_ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn);
+static void u_ae_stop(int64_t voice);
+static void u_ae_stop_all(void);
+static int64_t u_ae_playing(int64_t voice);
+static void u_ae_set_volume(int64_t voice, const double *p, int64_t n);
+static void u_ae_set_pan(int64_t voice, const double *p, int64_t n);
+static int64_t u_ae_seek(int64_t voice, const double *p, int64_t n);
+static void u_ae_render(int32_t *out, int64_t n);
 
 /* Set the output rate (frames per second) and stop every voice; the clips stay loaded. */
-void ae_init(int64_t rate) {
+static void u_ae_init(int64_t rate) {
     if (rate > 0 && rate <= 384000) ae_out_rate = (int32_t) rate;
-    ae_stop_all();
+    u_ae_stop_all();
 }
 
-int64_t ae_rate(void) { return ae_out_rate; }
+static int64_t u_ae_rate(void) { return ae_out_rate; }
 
-int64_t ae_vorbis(void) { return AE_HAVE_VORBIS; }
+static int64_t u_ae_vorbis(void) { return AE_HAVE_VORBIS; }
 
 /* A clip from a file's bytes: WAV, or OGG Vorbis where the build has it. */
-int64_t ae_load(const uint8_t *bytes, int64_t n) {
+static int64_t u_ae_load(const uint8_t *bytes, int64_t n) {
     if (n >= 12 && memcmp(bytes, "RIFF", 4) == 0) return ae_load_wav(bytes, n);
 #if AE_HAVE_VORBIS
     if (n >= 4 && memcmp(bytes, "OggS", 4) == 0) return ae_load_ogg(bytes, n);
@@ -350,7 +377,7 @@ int64_t ae_load(const uint8_t *bytes, int64_t n) {
 }
 
 /* A mono clip from `n` samples in [-1, 1] at `rate`. */
-int64_t ae_load_pcm(const float *samples, int64_t n, int64_t rate) {
+static int64_t u_ae_load_pcm(const float *samples, int64_t n, int64_t rate) {
     float *copy;
     if (n <= 0 || rate <= 0 || rate > 384000) return 0;
     copy = (float *) malloc((size_t) n * sizeof(float));
@@ -360,7 +387,7 @@ int64_t ae_load_pcm(const float *samples, int64_t n, int64_t rate) {
 }
 
 /* Unload a clip; every voice playing it stops. */
-void ae_unload(int64_t clip) {
+static void u_ae_unload(int64_t clip) {
     ae_clip *c = ae_clip_of(clip);
     int s;
     if (!c) return;
@@ -371,12 +398,12 @@ void ae_unload(int64_t clip) {
     c->samples = NULL;
 }
 
-int64_t ae_clip_frames(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->frames : 0; }
-int64_t ae_clip_rate(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->rate : 0; }
-int64_t ae_clip_channels(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->channels : 0; }
+static int64_t u_ae_clip_frames(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->frames : 0; }
+static int64_t u_ae_clip_rate(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->rate : 0; }
+static int64_t u_ae_clip_channels(int64_t clip) { ae_clip *c = ae_clip_of(clip); return c ? c->channels : 0; }
 
 /* Play a clip: p = [volume, looping (0 / 1), pan, start in seconds].  0 when no slot is free. */
-int64_t ae_play(int64_t clip, const double *p, int64_t n) {
+static int64_t u_ae_play(int64_t clip, const double *p, int64_t n) {
     ae_clip *c = ae_clip_of(clip);
     int s;
     if (!c || n < 4) return 0;
@@ -400,45 +427,45 @@ int64_t ae_play(int64_t clip, const double *p, int64_t n) {
 }
 
 /* Play `n` mono samples at `rate`, once: p = [volume].  The clip is freed when it ends. */
-int64_t ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn) {
+static int64_t u_ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn) {
     double params[4];
     int64_t clip, voice;
     if (pn < 1) return 0;
-    clip = ae_load_pcm(samples, n, rate);
+    clip = u_ae_load_pcm(samples, n, rate);
     if (clip == 0) return 0;
     params[0] = p[0];
     params[1] = 0.0;
     params[2] = 0.0;
     params[3] = 0.0;
-    voice = ae_play(clip, params, 4);
+    voice = u_ae_play(clip, params, 4);
     if (voice == 0) {
-        ae_unload(clip);
+        u_ae_unload(clip);
         return 0;
     }
     ae_voice_of(voice)->owns_clip = 1;
     return voice;
 }
 
-void ae_stop(int64_t voice) {
+static void u_ae_stop(int64_t voice) {
     ae_voice *v = ae_voice_of(voice);
     if (v) ae_end(v);
 }
 
-void ae_stop_all(void) {
+static void u_ae_stop_all(void) {
     int s;
     for (s = 0; s < AE_VOICES; s++) {
         if (ae_voices[s].clip != 0) ae_end(&ae_voices[s]);
     }
 }
 
-int64_t ae_playing(int64_t voice) { return ae_voice_of(voice) != NULL; }
+static int64_t u_ae_playing(int64_t voice) { return ae_voice_of(voice) != NULL; }
 
-void ae_set_volume(int64_t voice, const double *p, int64_t n) {
+static void u_ae_set_volume(int64_t voice, const double *p, int64_t n) {
     ae_voice *v = ae_voice_of(voice);
     if (v && n >= 1) v->volume = (float) p[0];
 }
 
-void ae_set_pan(int64_t voice, const double *p, int64_t n) {
+static void u_ae_set_pan(int64_t voice, const double *p, int64_t n) {
     ae_voice *v = ae_voice_of(voice);
     ae_clip *c;
     if (!v || n < 1) return;
@@ -449,7 +476,7 @@ void ae_set_pan(int64_t voice, const double *p, int64_t n) {
 
 /* Move a voice to `p[0]` seconds into its clip; false for a finished voice or a position past
  * the end of a clip that does not loop. */
-int64_t ae_seek(int64_t voice, const double *p, int64_t n) {
+static int64_t u_ae_seek(int64_t voice, const double *p, int64_t n) {
     ae_voice *v = ae_voice_of(voice);
     ae_clip *c;
     double pos;
@@ -467,7 +494,7 @@ int64_t ae_seek(int64_t voice, const double *p, int64_t n) {
 
 /* Mix the next `n / 2` stereo frames into `out` (L, R interleaved), each a 16-bit value held
  * in 32 bits — loft's `vector<i32>`; a device's output layer reads `ae_mix` / `ae_to16` itself. */
-void ae_render(int32_t *out, int64_t n) {
+static void u_ae_render(int32_t *out, int64_t n) {
     int64_t frames = n / 2, done = 0;
     float acc[512];
     while (done < frames) {
@@ -479,3 +506,45 @@ void ae_render(int32_t *out, int64_t n) {
         done += chunk;
     }
 }
+
+/* ── The bound functions: each holds the engine lock, which the output layer's mixer holds too. ── */
+
+void ae_init(int64_t rate);
+int64_t ae_rate(void);
+int64_t ae_vorbis(void);
+int64_t ae_load(const uint8_t *bytes, int64_t n);
+int64_t ae_load_pcm(const float *samples, int64_t n, int64_t rate);
+void ae_unload(int64_t clip);
+int64_t ae_clip_frames(int64_t clip);
+int64_t ae_clip_rate(int64_t clip);
+int64_t ae_clip_channels(int64_t clip);
+int64_t ae_play(int64_t clip, const double *p, int64_t n);
+int64_t ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn);
+void ae_stop(int64_t voice);
+void ae_stop_all(void);
+int64_t ae_playing(int64_t voice);
+void ae_set_volume(int64_t voice, const double *p, int64_t n);
+void ae_set_pan(int64_t voice, const double *p, int64_t n);
+int64_t ae_seek(int64_t voice, const double *p, int64_t n);
+void ae_render(int32_t *out, int64_t n);
+
+void ae_init(int64_t rate) { AE_LOCK(); u_ae_init(rate); AE_UNLOCK(); }
+int64_t ae_rate(void) { int64_t r; AE_LOCK(); r = u_ae_rate(); AE_UNLOCK(); return r; }
+int64_t ae_vorbis(void) { int64_t r; AE_LOCK(); r = u_ae_vorbis(); AE_UNLOCK(); return r; }
+int64_t ae_load(const uint8_t *bytes, int64_t n) { int64_t r; AE_LOCK(); r = u_ae_load(bytes, n); AE_UNLOCK(); return r; }
+int64_t ae_load_pcm(const float *samples, int64_t n, int64_t rate) { int64_t r; AE_LOCK(); r = u_ae_load_pcm(samples, n, rate); AE_UNLOCK(); return r; }
+void ae_unload(int64_t clip) { AE_LOCK(); u_ae_unload(clip); AE_UNLOCK(); }
+int64_t ae_clip_frames(int64_t clip) { int64_t r; AE_LOCK(); r = u_ae_clip_frames(clip); AE_UNLOCK(); return r; }
+int64_t ae_clip_rate(int64_t clip) { int64_t r; AE_LOCK(); r = u_ae_clip_rate(clip); AE_UNLOCK(); return r; }
+int64_t ae_clip_channels(int64_t clip) { int64_t r; AE_LOCK(); r = u_ae_clip_channels(clip); AE_UNLOCK(); return r; }
+int64_t ae_play(int64_t clip, const double *p, int64_t n) { int64_t r; AE_LOCK(); r = u_ae_play(clip, p, n); AE_UNLOCK(); return r; }
+int64_t ae_play_raw(const float *samples, int64_t n, int64_t rate, const double *p, int64_t pn) { int64_t r; AE_LOCK(); r = u_ae_play_raw(samples, n, rate, p, pn); AE_UNLOCK(); return r; }
+void ae_stop(int64_t voice) { AE_LOCK(); u_ae_stop(voice); AE_UNLOCK(); }
+void ae_stop_all(void) { AE_LOCK(); u_ae_stop_all(); AE_UNLOCK(); }
+int64_t ae_playing(int64_t voice) { int64_t r; AE_LOCK(); r = u_ae_playing(voice); AE_UNLOCK(); return r; }
+void ae_set_volume(int64_t voice, const double *p, int64_t n) { AE_LOCK(); u_ae_set_volume(voice, p, n); AE_UNLOCK(); }
+void ae_set_pan(int64_t voice, const double *p, int64_t n) { AE_LOCK(); u_ae_set_pan(voice, p, n); AE_UNLOCK(); }
+int64_t ae_seek(int64_t voice, const double *p, int64_t n) { int64_t r; AE_LOCK(); r = u_ae_seek(voice, p, n); AE_UNLOCK(); return r; }
+void ae_render(int32_t *out, int64_t n) { AE_LOCK(); u_ae_render(out, n); AE_UNLOCK(); }
+
+#include "audio_out.c"

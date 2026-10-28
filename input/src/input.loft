@@ -34,12 +34,29 @@
 // graphics — the same edge-detection logic runs on either input
 // source, so tests don't need a real GL context.
 //
+// A machine's own keys: `device_open()` then `input_tick_device()` each
+// tick reads the keyboard with no window — the Tanmatsu's keys, or the
+// terminal the program runs in.  Same key codes, same bindings.
+//
 // `input_tick` is the only function CI cannot exercise — it polls a live
 // GL context.  Everything else runs headless through
 // `input_tick_from_state`, which takes the same snapshot a replay or a
 // network rollback would feed it.
 
 use graphics::*;
+
+// The key source of the machine itself (c/keys.c): the Tanmatsu's keyboard, or the terminal
+// the program runs in.  `input_tick_device` reads it where `input_tick` reads a graphics window.
+fn ik_open() -> integer;
+#c "ik_open" "int64_t(void)"
+fn ik_close();
+#c "ik_close" "void(void)"
+fn ik_poll();
+#c "ik_poll" "void(void)"
+fn ik_down(code: integer) -> integer;
+#c "ik_down" "int64_t(int64_t)"
+fn ik_feed(bytes: const vector<u8>);
+#c "ik_feed" "void(const uint8_t*, int64_t)"
 
 // Maximum key code the library tracks.  Graphics's highest constant
 // today is `KEY_F12 = 146`; 256 leaves room for future additions and
@@ -173,6 +190,40 @@ pub fn input_tick(self: &InputState) {
   self.is_mouse_wheel = graphics::gl_mouse_wheel();
 }
 
+// Start reading the machine's own keys: the Tanmatsu's keyboard, or the
+// terminal this program runs in (put in raw mode — no echo, no line
+// buffering — until `device_close` or the program ends).  False where the
+// machine has none: no terminal on stdin, or a browser build.
+pub fn device_open() -> boolean {
+  ik_open() != 0
+}
+
+// Give the terminal back as it was.
+pub fn device_close() {
+  ik_close();
+}
+
+// Hand the key source bytes as if they were typed on a terminal: `w` is
+// 119, Enter is 13, an arrow is ESC `[` A / B / C / D (27, 91, 65 for Up).
+// They count on the next `input_tick_device`.  For tests and replays; it
+// works with no terminal at all.
+pub fn device_feed(bytes: const vector<u8>) {
+  ik_feed(bytes);
+}
+
+// Refresh state for one tick from the machine's own keys, as `input_tick`
+// does from a graphics window.  The Tanmatsu reports which keys are held;
+// a terminal reports key PRESSES, so there a key is down for the tick its
+// press arrived in and again on each of the terminal's repeats while it is
+// held.  The mouse reads as untouched.
+pub fn input_tick_device(self: &InputState) {
+  self.advance_tick();
+  ik_poll();
+  for k in 1..KEY_MAX {
+    if ik_down(k) != 0 { self.is_keys_now[k] = true; }
+  }
+}
+
 // Advance state from a caller-supplied snapshot instead of polling
 // `graphics`.  Used by tests (no GL context) and by network replay
 // / record-playback systems.  `keys` length is clamped to KEY_MAX;
@@ -194,6 +245,13 @@ pub fn input_tick_from_state(
   self.is_mouse_y = my;
   self.is_mouse_buttons_now = mbtn;
   self.is_mouse_wheel = wheel;
+}
+
+// True if key `key` (a graphics key code, `KEY_W`, ...) is down this tick,
+// bound or not — for a key a game reads directly.  A code outside 0 ..
+// 255 is never down.
+pub fn is_key_down(self: const InputState, key: integer) -> boolean {
+  key >= 0 && key < KEY_MAX && self.is_keys_now[key]
 }
 
 // True if ANY of the action's bound keys is currently down.

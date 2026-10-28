@@ -10,7 +10,7 @@
 // > and a duck that is lifted restores the level EXACTLY.**
 //
 // Both halves are the whole package. The first says why a mixer exists at all:
-// `graphics::audio_set_volume` moves one sink, so "turn the music down" without a
+// `audio::set_volume` moves one voice, so "turn the music down" without a
 // bus means walking a list a game had to keep itself, and "turn everything down"
 // means walking all of them. The second says why ducking is not a multiplication:
 // a game ducks the music under speech a thousand times an hour, and restoring by
@@ -26,11 +26,11 @@
 // here is a number that multiplies, arranged in a tree. That is what a 2-D game
 // wants from a mixer, and everything past it belongs to a sound engine.
 //
-// Not an owner of playback either: `graphics` plays the sounds and this decides
+// Not an owner of playback either: `audio` plays the sounds and this decides
 // how loud. A sink a caller played itself is welcome — `attach` puts an existing
 // handle on a bus — which is also what lets every rule here be tested on a
 // machine with no audio device at all.
-use graphics;
+use audio;
 
 /// One level in the tree: a name, a level, and what it hangs under.
 pub struct Bus {
@@ -47,7 +47,7 @@ pub struct Bus {
 
 /// One playing sound, and the bus it answers to.
 pub struct Voice {
-  /// The handle `graphics::audio_play` answered — the key, because it is the
+  /// The voice handle `audio::play` answered — the key, because it is the
   /// one thing a caller already holds.
   vc_sink: integer,
   vc_bus: text = "",
@@ -123,14 +123,14 @@ pub fn level(m: const Mixer, sink: integer) -> float {
 
 /// Put an already-playing sink on a bus at its own level.
 ///
-/// The seam this package is built around: `play` is `graphics::audio_play`
+/// The seam this package is built around: `play` is `audio::play`
 /// followed by this, and a caller who plays a sound their own way — a procedural
 /// effect, a clip started before the mixer existed — gets the same bus.
 pub fn attach(m: Mixer, sink: integer, bus: text, volume: float = 1.0) -> boolean {
   if sink < 0 || m.buses[bus] == null { return false }
   if m.voices[sink] != null { m.voices[sink] = null; }
   m.voices += [Voice { vc_sink: sink, vc_bus: bus, vc_volume: volume }];
-  graphics::audio_set_volume(sink, level(m, sink));
+  audio::set_volume(sink, level(m, sink));
   true
 }
 
@@ -139,7 +139,7 @@ pub fn detach(m: Mixer, sink: integer) {
   if m.voices[sink] != null { m.voices[sink] = null; }
 }
 
-/// Play a clip on a bus. The arguments past `volume` are `graphics::audio_play`'s
+/// Play a clip on a bus. The arguments past `volume` are `audio::play`'s
 /// and mean exactly what they mean there.
 ///
 /// Answers the sink handle, or -1 when the sound did not start — in which case
@@ -147,7 +147,7 @@ pub fn detach(m: Mixer, sink: integer) {
 pub fn play(m: Mixer, bus: text, clip: integer, volume: float = 1.0,
             looping: boolean = false, pan: float = 0.0, start: float = 0.0) -> integer {
   if m.buses[bus] == null { return -1 }
-  py_sink = graphics::audio_play(clip, volume * gain(m, bus), looping, pan, start);
+  py_sink = audio::play(clip, volume * gain(m, bus), looping, pan, start) ?? -1;
   if py_sink < 0 { return -1 }
   _ = attach(m, py_sink, bus, volume);
   py_sink
@@ -156,7 +156,7 @@ pub fn play(m: Mixer, bus: text, clip: integer, volume: float = 1.0,
 /// Re-apply every voice's level — after a bus moved, or after a whole tree did.
 fn reapply(m: Mixer) {
   for v in m.voices {
-    graphics::audio_set_volume(v.vc_sink, v.vc_volume * gain(m, v.vc_bus));
+    audio::set_volume(v.vc_sink, v.vc_volume * gain(m, v.vc_bus));
   }
 }
 
@@ -222,13 +222,13 @@ pub fn ducked(m: const Mixer, name: text) -> boolean {
 /// list, so this is where a caller already is.
 pub fn pan(m: const Mixer, sink: integer, position: float) {
   if m.voices[sink] == null { return }
-  graphics::audio_set_pan(sink, position);
+  audio::set_pan(sink, position);
 }
 
 /// Stop one sound and forget it.
 pub fn stop(m: Mixer, sink: integer) {
   if m.voices[sink] == null { return }
-  graphics::audio_stop(sink);
+  audio::stop(sink);
   m.voices[sink] = null;
 }
 
@@ -240,7 +240,7 @@ pub fn stop_bus(m: Mixer, name: text) -> integer {
   sb_gone: vector<integer> = [];
   for v in m.voices if under(m, v.vc_bus, name) { sb_gone += [v.vc_sink]; }
   for s in sb_gone {
-    graphics::audio_stop(s);
+    audio::stop(s);
     m.voices[s] = null;
   }
   len(sb_gone)
@@ -250,7 +250,7 @@ pub fn stop_bus(m: Mixer, name: text) -> integer {
 pub fn stop_all(m: Mixer) -> integer {
   sa_gone: vector<integer> = [];
   for v in m.voices { sa_gone += [v.vc_sink]; }
-  graphics::audio_stop_all();
+  audio::stop_all();
   for s in sa_gone { m.voices[s] = null; }
   len(sa_gone)
 }

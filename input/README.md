@@ -68,11 +68,30 @@ key code it carries, while `input_tick` polls only the keys the current
 bindings name; and the snapshot is whatever the caller says, so it is also
 how you replay input that never came from a keyboard.
 
+## The machine's own keys
+
+`device_open()` and then `input_tick_device(state)` each tick read the keyboard
+of the machine itself, with no window: the Tanmatsu's keys (through its board
+support package), or the terminal the program runs in (raw mode, until
+`device_close()` or the end of the program).  The key codes and the bindings
+are the same as `input_tick`'s.
+
+The Tanmatsu reports which keys are held.  A terminal reports key PRESSES, so
+there a key is down for the tick its press arrived in, and again on each of the
+terminal's repeats while it is held — enough for a turn-based or puzzle game,
+not for holding a key down in an action game.  `device_feed(bytes)` hands the
+terminal reader bytes as if typed (an arrow is ESC `[` A..D), which is how the
+suite tests it with no terminal.  `is_key_down(state, code)` reads one key,
+bound or not.
+
 ## API
 
 - **Build**: `input_new(bindings)`, `input_set_bindings(state, bindings)`.
 - **Advance**: `input_tick(state)` (polls `graphics`),
+  `input_tick_device(state)` (the machine's own keys, after `device_open()`),
   `input_tick_from_state(state, keys, mx, my, buttons, wheel)`.
+- **Keys**: `is_key_down(state, code)`; `device_open() -> boolean`,
+  `device_close()`, `device_feed(bytes)`.
 - **Actions**: `is_action_pressed`, `is_action_just_pressed`,
   `is_action_just_released`.
 - **Axis**: `get_axis(state, name) -> float`.

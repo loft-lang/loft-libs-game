@@ -3,12 +3,12 @@
 //
 // What a bus multiplies, and what a duck puts back.
 //
-// Every number below is hand-computed from the tree, not read off a run. And
-// nothing here plays a sound: CI has no audio device, so a test that needed one
-// would gate nothing — `attach` puts a handle a caller already has on a bus, and
-// that is the seam this whole suite runs through.
+// Every number below is hand-computed from the tree, not read off a run.  CI has
+// no audio device, so nothing here opens one: the `attach` cells put a handle a
+// caller already has on a bus, and the `heard` cells read the mix itself back
+// through `audio::render`, which is what a device would play.
 use audio_bus;
-use graphics;
+use audio;
 
 fn a_mixer() -> audio_bus::Mixer {
   m = audio_bus::mixer();
@@ -119,7 +119,7 @@ fn test_detaching_leaves_the_sound_alone() {
 fn test_stopping_and_panning_one_voice() {
   m = a_mixer();
   _ = audio_bus::attach(m, 4, "music", 1.0);
-  audio_bus::pan(m, 4, -1.0);          // reaches graphics; nothing here to read back
+  audio_bus::pan(m, 4, -1.0);          // reaches audio; nothing here to read back
   audio_bus::pan(m, 404, -1.0);        // …and a sink nobody attached is a no-op
   audio_bus::stop(m, 4);
   assert(audio_bus::level(m, 4) == 0.0, "a stopped voice is off the mixer");
@@ -143,9 +143,68 @@ fn test_playing_without_a_device_attaches_nothing() {
   // which never started leaves no voice behind: a mixer whose list fills up with
   // handles that are not playing reports a scene as noisy when it is silent.
   m = a_mixer();
-  clip = graphics::audio_load("no-such-file.wav");
+  clip = audio::load("no-such-file.wav") ?? 0;
   sink = audio_bus::play(m, "music", clip, 1.0);
   assert(sink < 0, "no clip, no sound");
   assert(audio_bus::stop_all(m) == 0, "and no voice on the mixer");
   assert(audio_bus::play(m, "voices", clip, 1.0) < 0, "a bus nobody declared plays nothing");
 }
+
+// --- What is heard ---
+//
+// A clip of 0.5 at 8000 Hz, played hard left (pan -1: the left gain is exactly 1), so the left
+// sample is round(level * 0.5 * 32767), halves away from zero.
+
+fn heard() -> integer {
+  out = audio::render(1);
+  out[0] ?? -99999
+}
+
+fn half_clip() -> integer {
+  audio::init(8000);
+  samples: vector<single> = [0.5f; 64];
+  audio::load_samples(samples, 8000) ?? 0
+}
+
+// music 0.5 under master 1.0: 0.5 * 0.5 = 0.25 -> 8191.75 -> 8192.
+fn test_heard_through_the_bus() {
+  c = half_clip();
+  m = a_mixer();
+  v = audio_bus::play(m, "music", c, 1.0, false, -1.0);
+  assert(v > 0, "playing");
+  assert(heard() == 8192, "0.25 heard: {heard()}");
+}
+
+// steps 0.5 under sfx 0.8 under master: 0.5 * 0.8 * 0.5 (the clip) = 0.2 -> 6553.4 -> 6553;
+// master to 0.5 halves it: 0.1 -> 3276.7 -> 3277.
+fn test_heard_through_two_buses_and_master() {
+  c = half_clip();
+  m = a_mixer();
+  _ = audio_bus::play(m, "steps", c, 1.0, false, -1.0);
+  assert(heard() == 6553, "0.2 heard: {heard()}");
+  _ = audio_bus::set_volume(m, audio_bus::MASTER, 0.5);
+  assert(heard() == 3277, "0.1 heard: {heard()}");
+}
+
+// A duck to 0.1 on music: 0.1 * 0.5 = 0.05 -> 1638.35 -> 1638; lifted, exactly 8192 again.
+fn test_a_lifted_duck_is_heard_exactly() {
+  c = half_clip();
+  m = a_mixer();
+  _ = audio_bus::play(m, "music", c, 1.0, false, -1.0);
+  _ = audio_bus::duck(m, "music", 0.1);
+  assert(heard() == 1638, "ducked: {heard()}");
+  _ = audio_bus::unduck(m, "music");
+  assert(heard() == 8192, "restored: {heard()}");
+}
+
+// stop_bus silences what is under it and nothing else: sfx stops, music plays on.
+fn test_stop_bus_is_heard() {
+  c = half_clip();
+  m = a_mixer();
+  _ = audio_bus::play(m, "music", c, 1.0, true, -1.0);
+  _ = audio_bus::play(m, "steps", c, 1.0, true, -1.0);
+  assert(heard() == 8192 + 6553, "both: {heard()}");
+  assert(audio_bus::stop_bus(m, "sfx") == 1, "one voice under sfx");
+  assert(heard() == 8192, "music alone: {heard()}");
+}
+

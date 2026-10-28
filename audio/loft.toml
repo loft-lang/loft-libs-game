@@ -1,12 +1,12 @@
 [package]
 name    = "audio"
-version = "0.1.0"
+version = "0.2.0"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "Clips, voices and one mix: the same sound on a PC and on a 32-bit device"
 categories  = ["game", "audio"]
 
-# ⚠ FIRST release, so both floors are this release itself.
+# 0.2.0 adds the output layer (`start`); every 0.1 call is unchanged.
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 

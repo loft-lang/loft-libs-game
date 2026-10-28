@@ -4,10 +4,11 @@
 // audio — clips, voices and one mix, the same on every target.
 //
 // The engine (c/audio_engine.c) holds the clips and the playing voices and RENDERS: `render`
-// answers the next stereo frames of the mix as 16-bit samples.  A platform's output — a sound
-// card, the Tanmatsu's I2S stream — is a layer that asks the engine for frames; this release
-// has the engine and its render, so every rule below is checkable on a machine with no sound
-// device.  The calls are `graphics`' audio calls (`audio_play(clip, volume, looping, pan,
+// answers the next stereo frames of the mix as 16-bit samples.  A platform's OUTPUT asks the
+// engine for frames on its own thread (c/audio_out.c): `start()` opens it — the system's sound
+// device on a desktop (miniaudio), the I2S stream on a Tanmatsu — and from then on every voice
+// is heard.  Without `start`, `render` is the way out, so every rule below is checkable on a
+// machine with no sound device.  The calls are `graphics`' audio calls (`audio_play(clip, volume, looping, pan,
 // start)` and the rest), so a program written against those moves over unchanged.
 //
 // The mix, per output frame: each voice reads its clip with linear interpolation, resampled
@@ -19,6 +20,14 @@
 // one playing, never a slot: once a voice ends, its handle acts on nothing, even after its
 // slot plays something else.
 
+fn ae_out_open(mode: integer) -> integer;
+#c "ae_out_open" "int64_t(int64_t)"
+fn ae_out_close();
+#c "ae_out_close" "void(void)"
+fn ae_out_running() -> integer;
+#c "ae_out_running" "int64_t(void)"
+fn ae_out_frames() -> integer;
+#c "ae_out_frames" "int64_t(void)"
 fn ae_init(rate: integer);
 #c "ae_init" "void(int64_t)"
 fn ae_rate() -> integer;
@@ -171,3 +180,30 @@ pub fn render(frames: integer) -> vector<i32> {
   if frames > 0 { ae_render(out); }
   out
 }
+
+// --- Output ---
+
+/// Start the output, so every voice is heard: the system's sound device on a desktop, the
+/// board's I2S stream on a Tanmatsu.  `silent` plays at real-time pace into no device at all,
+/// for a test or a server.  Answers whether it runs: false where this machine has no output
+/// (no sound device, or a browser build), and the engine then only renders.  Starting twice
+/// is starting once.  Set the rate with `init` before this.
+pub fn start(silent: boolean = false) -> boolean {
+  ae_out_open(if silent { 1 } else { 0 }) != 0
+}
+
+/// Stop the output; the voices keep their place and play on from it after the next `start`.
+pub fn stop_output() {
+  ae_out_close();
+}
+
+/// Is the output running?
+pub fn output_running() -> boolean {
+  ae_out_running() != 0
+}
+
+/// How many stereo frames the output has taken since it started — the clock of what was heard.
+pub fn output_frames() -> integer {
+  ae_out_frames()
+}
+
