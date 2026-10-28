@@ -38,6 +38,7 @@ games don't have to chase mutually-compatible point versions across
 | `time/` | time | ✅ date/time arithmetic, `DateTime` / `Duration` |
 | `fixstep/` | fixstep | ✅ the fixed simulation step: clock, bank, one-shot timer, ease |
 | `input/` | input | ✅ named actions and axes over `graphics`' keys and mouse, with per-tick edges |
+| [`screen/`](screen/) | a small frame on the machine's screen, scaled up, with the keys of its window — an X11 window, a Tanmatsu display |
 | `particles/` | particles | (planned, lib_plans/future/27) |
 | `physics_2body/` | physics_2body | (planned, lib_plans/future/26) |
 | `audio_bus/` | audio_bus | ✅ buses that multiply, and a duck that restores exactly |

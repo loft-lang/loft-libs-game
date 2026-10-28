@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The scaled image, read back off-screen, so it runs with no display.  The frame is 2x2,
+// RGB565: red 63488 (31 << 11), green 2016 (63 << 5), blue 31, white 65535, row by row
+// [R G / B W].  At scale 3 every frame pixel is a 3x3 block of a 6x6 screen.
+use screen;
+
+const R = 63488;
+const G = 2016;
+const B = 31;
+const W = 65535;
+
+fn main() {
+  assert(screen::open(2, 2, 3, "test", true), "off-screen opens anywhere");
+  assert(screen::width() == 6 && screen::height() == 6, "6x6");
+  frame: vector<i32> = [R as i32, G as i32, B as i32, W as i32];
+  screen::show(frame, 2, 2);
+  assert(screen::shown(0, 0) == R && screen::shown(2, 2) == R, "the red block's corners");
+  assert(screen::shown(3, 0) == G && screen::shown(5, 2) == G, "green to its right");
+  assert(screen::shown(0, 3) == B && screen::shown(2, 5) == B, "blue below");
+  assert(screen::shown(5, 5) == W, "white at the far corner");
+  assert(screen::shown(6, 0) == -1 && screen::shown(-1, 0) == -1, "outside reads -1");
+  assert(!screen::has_keys(), "off-screen has no keys");
+  assert(screen::poll(0), "still open");
+  screen::close();
+  assert(screen::shown(0, 0) == -1, "closed: nothing shown");
+}
+
+// A frame smaller than the screen is centred, the rest black: a 1x1 frame at scale 2 shown on
+// a screen opened for 2x2 frames (4x4) covers (1, 1) .. (2, 2).
+fn test_a_smaller_frame_is_centred() {
+  assert(screen::open(2, 2, 2, "test", true), "opens");
+  one: vector<i32> = [W as i32];
+  screen::show(one, 1, 1);
+  assert(screen::shown(0, 0) == 0 && screen::shown(3, 3) == 0, "black round it");
+  assert(screen::shown(1, 1) == W && screen::shown(2, 2) == W, "the frame in the middle");
+  screen::close();
+}
+
+// A frame with fewer values than its size shows nothing, and a closed screen shows nothing.
+fn test_a_short_frame_shows_nothing() {
+  assert(screen::open(2, 2, 1, "test", true), "opens");
+  short: vector<i32> = [R as i32];
+  screen::show(short, 2, 2);
+  assert(screen::shown(0, 0) == 0, "nothing drawn");
+  screen::close();
+  assert(!screen::open(0, 2, 1, "test", true), "an empty frame size is refused");
+}
