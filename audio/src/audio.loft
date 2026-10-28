@@ -1,0 +1,173 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// audio — clips, voices and one mix, the same on every target.
+//
+// The engine (c/audio_engine.c) holds the clips and the playing voices and RENDERS: `render`
+// answers the next stereo frames of the mix as 16-bit samples.  A platform's output — a sound
+// card, the Tanmatsu's I2S stream — is a layer that asks the engine for frames; this release
+// has the engine and its render, so every rule below is checkable on a machine with no sound
+// device.  The calls are `graphics`' audio calls (`audio_play(clip, volume, looping, pan,
+// start)` and the rest), so a program written against those moves over unchanged.
+//
+// The mix, per output frame: each voice reads its clip with linear interpolation, resampled
+// from the clip's rate to the output rate; its volume scales it and its pan places it by Web
+// Audio's StereoPannerNode law (equal-power: a mono clip at the centre is cos(pi/4) = 0.7071 on
+// each side); the voices are summed, clamped to [-1, 1] and written as round(s * 32767).
+//
+// Handles: a clip or a voice is a positive integer, null on failure.  A voice handle names
+// one playing, never a slot: once a voice ends, its handle acts on nothing, even after its
+// slot plays something else.
+
+fn ae_init(rate: integer);
+#c "ae_init" "void(int64_t)"
+fn ae_rate() -> integer;
+#c "ae_rate" "int64_t(void)"
+fn ae_vorbis() -> integer;
+#c "ae_vorbis" "int64_t(void)"
+fn ae_load(bytes: const vector<u8>) -> integer;
+#c "ae_load" "int64_t(const uint8_t*, int64_t)"
+fn ae_load_pcm(samples: const vector<single>, rate: integer) -> integer;
+#c "ae_load_pcm" "int64_t(const float*, int64_t, int64_t)"
+fn ae_unload(clip: integer);
+#c "ae_unload" "void(int64_t)"
+fn ae_clip_frames(clip: integer) -> integer;
+#c "ae_clip_frames" "int64_t(int64_t)"
+fn ae_clip_rate(clip: integer) -> integer;
+#c "ae_clip_rate" "int64_t(int64_t)"
+fn ae_clip_channels(clip: integer) -> integer;
+#c "ae_clip_channels" "int64_t(int64_t)"
+fn ae_play(clip: integer, p: const vector<float>) -> integer;
+#c "ae_play" "int64_t(int64_t, const double*, int64_t)"
+fn ae_play_raw(samples: const vector<single>, rate: integer, p: const vector<float>) -> integer;
+#c "ae_play_raw" "int64_t(const float*, int64_t, int64_t, const double*, int64_t)"
+fn ae_stop(voice: integer);
+#c "ae_stop" "void(int64_t)"
+fn ae_stop_all();
+#c "ae_stop_all" "void(void)"
+fn ae_playing(voice: integer) -> integer;
+#c "ae_playing" "int64_t(int64_t)"
+fn ae_set_volume(voice: integer, p: const vector<float>);
+#c "ae_set_volume" "void(int64_t, const double*, int64_t)"
+fn ae_set_pan(voice: integer, p: const vector<float>);
+#c "ae_set_pan" "void(int64_t, const double*, int64_t)"
+fn ae_seek(voice: integer, p: const vector<float>) -> integer;
+#c "ae_seek" "int64_t(int64_t, const double*, int64_t)"
+fn ae_render(out: vector<i32>);
+#c "ae_render" "void(int32_t*, int64_t)"
+
+// A handle the engine answered, null for its 0.
+fn handle(h: integer) -> integer? {
+  if h <= 0 { return null; }
+  h
+}
+
+/// Set the output rate (frames per second, 44100 unless set) and stop every voice; the
+/// loaded clips stay.  A platform's output layer calls this with the rate its device runs at.
+pub fn init(rate: integer = 44100) {
+  ae_init(rate);
+}
+
+/// The output rate the mix renders at.
+pub fn rate() -> integer {
+  ae_rate()
+}
+
+/// Does this build decode OGG Vorbis?  Every target but the two wasm builds does.
+pub fn has_vorbis() -> boolean {
+  ae_vorbis() != 0
+}
+
+/// Load a clip from a WAV (PCM 8/16/24/32-bit or float, mono or stereo) or OGG Vorbis file.
+/// Null when the file cannot be read or decoded.
+pub fn load(path: text) -> integer? {
+  bytes = read_bytes(path) ?? [];
+  if len(bytes) == 0 { return null; }
+  handle(ae_load(bytes))
+}
+
+/// Load a clip from a file's bytes already in memory.
+pub fn load_bytes(bytes: const vector<u8>) -> integer? {
+  if len(bytes) == 0 { return null; }
+  handle(ae_load(bytes))
+}
+
+/// A mono clip from samples in [-1, 1] at `sample_rate` — a sound made in loft, kept to be
+/// played again.
+pub fn load_samples(samples: const vector<single>, sample_rate: integer) -> integer? {
+  if len(samples) == 0 { return null; }
+  handle(ae_load_pcm(samples, sample_rate))
+}
+
+/// Unload a clip; every voice playing it stops.
+pub fn unload(clip: integer) {
+  ae_unload(clip);
+}
+
+/// A clip's length in frames, its rate and its channel count (1 or 2); 0 for no clip.
+pub fn clip_frames(clip: integer) -> integer {
+  ae_clip_frames(clip)
+}
+
+pub fn clip_rate(clip: integer) -> integer {
+  ae_clip_rate(clip)
+}
+
+pub fn clip_channels(clip: integer) -> integer {
+  ae_clip_channels(clip)
+}
+
+/// Play a clip: `volume` 0.0-1.0, `looping` repeats it until it is stopped, `pan` places it
+/// from -1 (left) through 0 (centre) to 1 (right), `start` begins that many seconds in.
+/// Answers the voice, or null when the clip is unknown or every voice is busy (64 play at once).
+pub fn play(clip: integer, volume: float, looping: boolean = false, pan: float = 0.0,
+            start: float = 0.0) -> integer? {
+  l = if looping { 1.0 } else { 0.0 };
+  handle(ae_play(clip, [volume, l, pan, start]))
+}
+
+/// Play mono samples in [-1, 1] at `sample_rate` once; the samples are released when it ends.
+pub fn play_raw(samples: const vector<single>, sample_rate: integer, volume: float) -> integer? {
+  if len(samples) == 0 { return null; }
+  handle(ae_play_raw(samples, sample_rate, [volume]))
+}
+
+/// Stop a voice.  A voice that already ended is left alone, as is whatever plays in its place.
+pub fn stop(voice: integer) {
+  ae_stop(voice);
+}
+
+/// Stop every voice — a pause menu, a scene change, a game over.
+pub fn stop_all() {
+  ae_stop_all();
+}
+
+/// Is this voice still playing?
+pub fn playing(voice: integer) -> boolean {
+  ae_playing(voice) != 0
+}
+
+/// Set a playing voice's volume, 0.0-1.0.
+pub fn set_volume(voice: integer, volume: float) {
+  ae_set_volume(voice, [volume]);
+}
+
+/// Move a playing voice across the stereo field, -1 (left) to 1 (right).
+pub fn set_pan(voice: integer, pan: float) {
+  ae_set_pan(voice, [pan]);
+}
+
+/// Jump a playing voice to `seconds` into its clip.  False for a voice that ended, and for a
+/// position past the end of a clip that does not loop (a looping clip wraps).
+pub fn seek(voice: integer, seconds: float) -> boolean {
+  ae_seek(voice, [seconds]) != 0
+}
+
+/// The next `frames` frames of the mix: 2 * frames samples, left and right interleaved, each
+/// a 16-bit value (-32767 to 32767).  Advances every voice; a voice that reaches the end of a
+/// clip it does not loop ends.
+pub fn render(frames: integer) -> vector<i32> {
+  out: vector<i32> = [0 as i32; 2 * frames];
+  if frames > 0 { ae_render(out); }
+  out
+}
