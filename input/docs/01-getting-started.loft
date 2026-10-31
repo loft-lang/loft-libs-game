@@ -8,7 +8,7 @@
 // an AXIS that reads -1 / 0 / +1 from a pair of keys.  Game code asks for "jump", not for key 32,
 // so a rebind changes one table instead of every call site.
 //
-// It reads `graphics`' polled keyboard and mouse once per `input_tick`.  This guide drives it with
+// It reads a `graphics` window's keys and mouse once per `input_tick`.  This guide drives it with
 // `input_tick_from_state` instead — the same edge detection from a snapshot you supply — so it
 // runs with no window, the way a test, a replay or a network rollback does.
 use graphics::*;    // the key codes: KEY_SPACE, KEY_LEFT, …
@@ -115,5 +115,6 @@ fn the_mouse() {
 //
 // - `tests/02-worked-examples.loft` — `@INP-001` … `@INP-004`: tick once per frame, a name is
 //   bare text, a mouse mask means "either", and a rebind keeps the keys already held.
-// - In a game, call `st.input_tick()` once per frame instead: it polls `graphics` for the keys
-//   the bindings name.
+// - In a game, call `st.input_tick(w, evs)` once per frame instead, with the `graphics` window
+//   and the events `w.events()` gave this frame: it reads the window for the keys the bindings
+//   name, and the wheel from the events.

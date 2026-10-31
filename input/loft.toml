@@ -2,7 +2,7 @@
 name    = "input"
 version = "0.3.0"
 loft    = ">=2026.10.0"
-api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 repository = "loft-libs-game"
 description = "Game input for loft — action/axis bindings resolved to per-tick input state."
@@ -16,4 +16,4 @@ entry = "src/input.loft"
 shim = "c/keys.c"
 
 [dependencies]
-graphics = ">=0.9.6"
+graphics = ">=0.10.0"

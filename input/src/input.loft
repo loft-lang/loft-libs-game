@@ -9,13 +9,13 @@
 // persist on the interpreter (loft#266).  Both are fixed and the test
 // gate is gone; the suite runs on the interpreter and `--native`.)
 //
-// Wraps the polled input primitives exposed by the `graphics` library
-// (`gl_key_pressed`, `gl_mouse_x`/`gl_mouse_y`, `gl_mouse_button`,
-// `gl_mouse_wheel`) into:
+// Wraps what a `graphics` window reports (`Window.key_down`,
+// `mouse_x`/`mouse_y`, `mouse_buttons`, and the `Wheel` events of the
+// frame) into:
 //
 //   - **Action bindings**: map a high-level action name (e.g. "jump")
 //     to one or more key codes — game code queries `is_action_pressed`
-//     instead of hardcoding `gl_key_pressed(KEY_SPACE)`.
+//     instead of hardcoding `w.key_down(KEY_SPACE)`.
 //   - **Edge detection**: `is_action_just_pressed` returns true on the
 //     exact tick a binding went from up to down (single-tick edge);
 //     same for `mouse_button_just_pressed`.  Built by keeping
@@ -25,7 +25,8 @@
 //
 // Per-tick contract:
 //
-//     state.input_tick();           // poll graphics primitives
+//     evs = w.events();             // the frame's events, after `w.poll()`
+//     state.input_tick(w, evs);     // read the window's keys and mouse
 //     if state.is_action_just_pressed("jump") { ... }
 //     vx = state.get_axis("horizontal");
 //
@@ -38,8 +39,8 @@
 // tick reads the keyboard with no window — the Tanmatsu's keys, or the
 // terminal the program runs in.  Same key codes, same bindings.
 //
-// `input_tick` is the only function CI cannot exercise — it polls a live
-// GL context.  Everything else runs headless through
+// `input_tick` needs a live window: the suite runs it where one opens
+// (a display, or Xvfb).  Everything else runs headless through
 // `input_tick_from_state`, which takes the same snapshot a replay or a
 // network rollback would feed it.
 
@@ -66,7 +67,7 @@ fn ik_feed(bytes: const vector<u8>);
 // binding returns false).
 KEY_MAX = 256;
 
-// Mouse-button bitmask values (mirrors `graphics::gl_mouse_button`).
+// Mouse-button bitmask values (as `Window.mouse_buttons` reports them).
 pub const MB_LEFT   = 1;
 pub const MB_RIGHT  = 2;
 pub const MB_MIDDLE = 4;
@@ -161,33 +162,41 @@ fn advance_tick(self: &InputState) {
   self.is_mouse_wheel = 0;
 }
 
-// Poll the graphics input primitives and refresh state for one tick.
-// Reads `gl_key_pressed` for every key code referenced by the
-// current bindings (avoids a 256-call sweep — only ask about keys
-// the game actually cares about), plus `gl_mouse_x`/`gl_mouse_y`/
-// `gl_mouse_button`/`gl_mouse_wheel` unconditionally.
+// Refresh state for one tick from window `w`.  Reads `w.key_down` for
+// every key code the current bindings name (only the keys the game cares
+// about, not a 256-key sweep), and the pointer and its buttons.  The
+// wheel is the sum of the `Wheel` deltas in `events` — the frame's
+// events, which the caller takes with `w.events()` after `w.poll()` and
+// keeps for its own use; input never takes them from the window.
 // Example: @INP-001
-pub fn input_tick(self: &InputState) {
+pub fn input_tick(self: &InputState, w: const Window, events: const vector<Event>) {
   self.advance_tick();
   for ab in self.is_bindings.bnd_actions {
     for k in ab.ab_keys {
       if k >= 0 && k < KEY_MAX {
-        self.is_keys_now[k] = graphics::gl_key_pressed(k);
+        self.is_keys_now[k] = w.key_down(k);
       }
     }
   }
   for ax in self.is_bindings.bnd_axes {
     if ax.ax_neg >= 0 && ax.ax_neg < KEY_MAX {
-      self.is_keys_now[ax.ax_neg] = graphics::gl_key_pressed(ax.ax_neg);
+      self.is_keys_now[ax.ax_neg] = w.key_down(ax.ax_neg);
     }
     if ax.ax_pos >= 0 && ax.ax_pos < KEY_MAX {
-      self.is_keys_now[ax.ax_pos] = graphics::gl_key_pressed(ax.ax_pos);
+      self.is_keys_now[ax.ax_pos] = w.key_down(ax.ax_pos);
     }
   }
-  self.is_mouse_x = graphics::gl_mouse_x();
-  self.is_mouse_y = graphics::gl_mouse_y();
-  self.is_mouse_buttons_now = graphics::gl_mouse_button();
-  self.is_mouse_wheel = graphics::gl_mouse_wheel();
+  self.is_mouse_x = w.mouse_x();
+  self.is_mouse_y = w.mouse_y();
+  self.is_mouse_buttons_now = w.mouse_buttons();
+  wheel = 0;
+  for ev in events {
+    match ev {
+      Wheel { delta, x, y } => { wheel += delta; },
+      _ => {}
+    }
+  }
+  self.is_mouse_wheel = wheel;
 }
 
 // Start reading the machine's own keys: the Tanmatsu's keyboard, or the
@@ -313,7 +322,7 @@ pub fn get_axis(self: const InputState, axis: text) -> float {
 }
 
 // Mouse position — pixels from the top-left of the window
-// (matches `graphics::gl_mouse_x` / `gl_mouse_y`).
+// (as `Window.mouse_x` / `mouse_y` report it).
 pub fn mouse_x(self: const InputState) -> float { self.is_mouse_x }
 // The pointer's y this frame, the companion of `mouse_x`.
 pub fn mouse_y(self: const InputState) -> float { self.is_mouse_y }
@@ -342,6 +351,6 @@ pub fn mouse_button_just_released(self: const InputState, button: integer) -> bo
   prev_down && !now_down
 }
 
-// Accumulated scroll-wheel delta since the last `input_tick` —
-// positive = scroll up.  Mirrors `graphics::gl_mouse_wheel`.
+// The scroll-wheel delta of this tick — positive = scroll up, one per
+// notch: the sum of the `Wheel` events handed to `input_tick`.
 pub fn mouse_wheel(self: const InputState) -> integer { self.is_mouse_wheel }

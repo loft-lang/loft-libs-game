@@ -10,9 +10,9 @@ loft install input
 ```
 
 Game code should ask *"is the player jumping?"*, not *"is key 32 down?"*.
-This library wraps the polled primitives `graphics` exposes
-(`gl_key_pressed`, `gl_mouse_x` / `gl_mouse_y`, `gl_mouse_button`,
-`gl_mouse_wheel`) into three things a frame loop actually wants:
+This library wraps what a `graphics` window reports (`Window.key_down`,
+`mouse_x` / `mouse_y`, `mouse_buttons`, and the frame's `Wheel` events) into
+three things a frame loop actually wants:
 
 - **Action bindings** — a name (`"jump"`) to one or more key codes; any of
   them fires it.
@@ -36,8 +36,9 @@ bindings = Bindings{
 };
 state = input_new(bindings);
 
-// ...once per frame, and only once:
-state.input_tick();
+// ...once per frame, and only once, after `w.poll()`:
+evs = w.events();            // the frame's events stay yours: input only reads them
+state.input_tick(w, evs);
 if state.is_action_just_pressed("jump") { player.jump(); }
 vx = state.get_axis("horizontal");
 ```
@@ -87,7 +88,8 @@ bound or not.
 ## API
 
 - **Build**: `input_new(bindings)`, `input_set_bindings(state, bindings)`.
-- **Advance**: `input_tick(state)` (polls `graphics`),
+- **Advance**: `input_tick(state, window, events)` (a `graphics` window and the
+  frame's events),
   `input_tick_device(state)` (the machine's own keys, after `device_open()`),
   `input_tick_from_state(state, keys, mx, my, buttons, wheel)`.
 - **Keys**: `is_key_down(state, code)`; `device_open() -> boolean`,
@@ -99,9 +101,18 @@ bound or not.
   `mouse_button_just_pressed`, `mouse_button_just_released`; masks
   `MB_LEFT`, `MB_RIGHT`, `MB_MIDDLE`.
 
-Key codes come from `graphics` (`KEY_SPACE` = 32, `KEY_A` = 97, …), public from
-graphics 0.9.6 on, so `use graphics::*;` brings them in; a binding
+Key codes come from `graphics` (`KEY_SPACE` = 32, `KEY_A` = 97, …), so
+`use graphics::*;` brings them in; a binding
 referencing a code outside `0..256` is ignored at query time rather than
 faulting.
+
+## Moving from 0.2
+
+0.3 reads graphics 0.10's `Window` (graphics 0.10 has no `gl_key_pressed`), so
+`input_tick` takes the window and the frame's events:
+`state.input_tick()` becomes `state.input_tick(w, w.events())` — or, when the
+game reads the events too, take them once and hand the same vector to both.
+The wheel is the sum of the `Wheel` deltas in it.  A program locked to
+graphics 0.9 stays on input 0.2.
 
 Licensed LGPL-3.0-or-later.
