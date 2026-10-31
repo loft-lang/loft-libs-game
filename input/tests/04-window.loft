@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `input_tick` against a live graphics window: keys and buttons read from the window, the wheel
+// summed from the events the caller hands it.  Runs where a window opens — a display, or Xvfb
+// (`GRAPHICS_TEST_WINDOW=1`); with neither it has nothing to read and returns.
+use graphics::*;
+use input::*;
+
+fn display() -> boolean {
+  (env_variable("DISPLAY") ?? "") != "" || (env_variable("GRAPHICS_TEST_WINDOW") ?? "") == "1"
+}
+
+fn test_input_tick_reads_the_window_and_sums_the_wheel() {
+  wo = open_window(64, 48, "input-tick");
+  if !display() { return; }
+  w = wo ?? return assert(false, "a display is set and no window opened");
+  st = input_new(Bindings {
+    bnd_actions: [ActionBinding { ab_name: "jump", ab_keys: [KEY_SPACE] }],
+    bnd_axes: [AxisBinding { ax_name: "move", ax_neg: KEY_LEFT, ax_pos: KEY_RIGHT }]
+  });
+  w.poll();
+  // Three notches up, one down, and a key event the wheel must not count: 1 + 3 - 1 = 3.
+  evs: vector<Event> = [
+    Wheel { delta: 1, x: 0.0, y: 0.0 },
+    KeyDown { key: KEY_SPACE, mods: 0, repeat: false },
+    Wheel { delta: 3, x: 0.0, y: 0.0 },
+    Wheel { delta: -1, x: 0.0, y: 0.0 }
+  ];
+  st.input_tick(w, evs);
+  assert(st.mouse_wheel() == 3, "the wheel is the sum of the Wheel deltas: {st.mouse_wheel()}");
+  // Nothing holds a key in a fresh window: a KeyDown in the events is not a held key.
+  assert(!st.is_action_pressed("jump"), "jump reads the window's key state, not the events");
+  assert(st.get_axis("move") == 0.0, "no arrow is held");
+  assert(st.mouse_x() == w.mouse_x() && st.mouse_y() == w.mouse_y(), "the pointer is the window's");
+  assert(!st.mouse_button_down(MB_LEFT), "no button is held");
+  // The wheel is this tick's, not a running total.
+  st.input_tick(w, []);
+  assert(st.mouse_wheel() == 0, "a tick with no Wheel events reads 0: {st.mouse_wheel()}");
+}
