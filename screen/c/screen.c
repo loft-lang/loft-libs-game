@@ -77,6 +77,13 @@ static int sc_platform_open(const char *title);
 static void sc_platform_present(void);
 static void sc_platform_wait(int wait_ms);
 static void sc_platform_close(void);
+#if defined(ESP_PLATFORM)
+/* The Tanmatsu writes the panel straight from the frame, with no back buffer between: the
+ * back buffer is the scaled picture a desktop window shows, and the panel is that picture
+ * turned.  `shown` reads the same picture from the frame it keeps. */
+static void sc_platform_present_frame(const int32_t *px, int w, int h);
+static int64_t sc_platform_shown(int64_t x, int64_t y);
+#endif
 
 int64_t sc_open(int64_t w, int64_t h, int64_t scale, int64_t mode, const char *title) {
     if (w <= 0 || h <= 0 || scale <= 0 || w * scale > 8192 || h * scale > 8192) return 0;
@@ -116,6 +123,12 @@ void sc_show(const int32_t *px, int64_t n, int64_t w, int64_t h) {
         sc_fw = (int) w;
         sc_fh = (int) h;
     }
+#if defined(ESP_PLATFORM)
+    if (sc_open_mode == 0) {
+        sc_platform_present_frame(px, (int) w, (int) h);
+        return;
+    }
+#endif
     sc_scale_into_back(px, (int) w, (int) h);
     if (sc_open_mode == 0) sc_platform_present();
 }
@@ -130,6 +143,9 @@ int64_t sc_has_keys(void) { return sc_open_mode == 0 && sc_have_keys; }
 int64_t sc_key(int64_t code) { return code > 0 && code < 256 && sc_keys[code]; }
 
 int64_t sc_shown(int64_t x, int64_t y) {
+#if defined(ESP_PLATFORM)
+    if (sc_open_mode == 0) return sc_platform_shown(x, y);
+#endif
     if (!sc_back || x < 0 || y < 0 || x >= sc_bw || y >= sc_bh) return -1;
     return sc_back[(size_t) y * (size_t) sc_bw + (size_t) x];
 }
@@ -171,6 +187,8 @@ static int sc_platform_open(const char *title) {
     return 1;
 }
 
+/* The back buffer turned into the panel, pixel by pixel: the reference the row path below
+ * matches, and the path for a panel in 24-bit colour. */
 static void sc_platform_present(void) {
     int x, y;
     int bpp = sc_fmt == BSP_DISPLAY_COLOR_FORMAT_16_565RGB ? 2 : 3;
@@ -205,13 +223,140 @@ static void sc_platform_present(void) {
     bsp_display_blit(0, 0, sc_ph, sc_pv, sc_panel);
 }
 
+/* The last frame shown, as RGB565, and where its scaled picture sits on the landscape screen:
+ * what `shown` reads, and what tells a new frame size from the last one. */
+static uint16_t *sc_frame = NULL;
+static int sc_frame_w = 0, sc_frame_h = 0, sc_ox = 0, sc_oy = 0;
+static int sc_panel_clean = 0;      /* the panel outside the frame is black and blitted */
+static uint16_t *sc_line = NULL;    /* one landscape row or column, sc_ph long */
+
+/* A pixel as the panel stores it. */
+static uint16_t sc_wire(uint16_t c) {
+    return sc_endian == BSP_DISPLAY_ENDIAN_BIG ? (uint16_t) ((c >> 8) | (c << 8)) : c;
+}
+
+/* `n` frame values, `stride` apart from `src`, each written `s` times into `line` (`len` long)
+ * from `at` on; a block that does not fit whole is left black, as `sc_scale_into_back` leaves
+ * it. */
+static void sc_fill_line(uint16_t *line, long len, long at, const uint16_t *src, size_t stride, int n, int s) {
+    int k, j;
+    memset(line, 0, (size_t) len * sizeof(uint16_t));
+    for (k = 0; k < n; k++) {
+        long b = at + (long) k * s;
+        uint16_t c;
+        if (b < 0 || b + s > len) continue;
+        c = sc_wire(src[(size_t) k * stride]);
+        for (j = 0; j < s; j++) line[b + j] = c;
+    }
+}
+
+/* The panel from the frame, a panel row at a time — the same pixels `sc_platform_present`
+ * writes from the back buffer.  A panel row is one landscape column (90, 270) or row (0,
+ * 180): one column or row of the frame stretched by the scale, so the `s` panel rows one
+ * frame column or row makes are the same and the first is copied.  Only the rows the frame
+ * covers are written and blitted; the rest stay black from when the frame's size last changed. */
+static void sc_present_rows(void) {
+    int s = sc_scale;
+    int turned = sc_rot == BSP_DISPLAY_ROTATION_90 || sc_rot == BSP_DISPLAY_ROTATION_270;
+    /* Landscape line `l` is panel row `l` (0, 90) or `sc_pv - 1 - l` (180, 270); along it the
+     * landscape order is the panel's (0, 270) or its reverse (90, 180). */
+    int row_back = sc_rot == BSP_DISPLAY_ROTATION_180 || sc_rot == BSP_DISPLAY_ROTATION_270;
+    int along_back = sc_rot == BSP_DISPLAY_ROTATION_90 || sc_rot == BSP_DISPLAY_ROTATION_180;
+    long len = (long) sc_ph, at = turned ? sc_oy : sc_ox;
+    long across = turned ? (long) sc_bw : (long) sc_bh, from = turned ? sc_ox : sc_oy;
+    int n_along = turned ? sc_frame_h : sc_frame_w, n_across = turned ? sc_frame_w : sc_frame_h;
+    size_t stride = turned ? (size_t) sc_frame_w : 1;
+    long first = -1, last = -1, k, x;
+    uint16_t *panel = (uint16_t *) sc_panel;
+    for (k = 0; k < n_across; k++) {
+        long b = from + k * s, j;
+        const uint16_t *src = turned ? sc_frame + k : sc_frame + (size_t) k * (size_t) sc_frame_w;
+        uint16_t *row0 = NULL;
+        if (b < 0 || b + s > across) continue;
+        sc_fill_line(sc_line, len, at, src, stride, n_along, s);
+        for (j = 0; j < s; j++) {
+            long l = b + j, py = row_back ? (long) sc_pv - 1 - l : l;
+            uint16_t *row = panel + (size_t) py * sc_ph;
+            if (row0) {
+                memcpy(row, row0, sc_ph * sizeof(uint16_t));
+            } else {
+                if (along_back) for (x = 0; x < len; x++) row[x] = sc_line[len - 1 - x];
+                else memcpy(row, sc_line, sc_ph * sizeof(uint16_t));
+                row0 = row;
+            }
+            if (first < 0 || py < first) first = py;
+            if (py > last) last = py;
+        }
+    }
+    if (!sc_panel_clean) {
+        bsp_display_blit(0, 0, sc_ph, sc_pv, sc_panel);
+        sc_panel_clean = 1;
+    } else if (first >= 0) {
+        bsp_display_blit(0, (size_t) first, sc_ph, (size_t) last + 1, panel + (size_t) first * sc_ph);
+    }
+}
+
+static void sc_platform_present_frame(const int32_t *px, int w, int h) {
+    size_t i, n = (size_t) w * (size_t) h;
+    if (w != sc_frame_w || h != sc_frame_h || !sc_frame) {
+        uint16_t *f = (uint16_t *) realloc(sc_frame, n * sizeof(uint16_t));
+        if (!f) return;
+        sc_frame = f;
+        sc_frame_w = w;
+        sc_frame_h = h;
+        sc_ox = (sc_bw - w * sc_scale) / 2;
+        sc_oy = (sc_bh - h * sc_scale) / 2;
+        /* A new size can leave the old picture outside the new one: start from black. */
+        memset(sc_panel, 0, sc_ph * sc_pv * (sc_fmt == BSP_DISPLAY_COLOR_FORMAT_16_565RGB ? 2 : 3));
+        sc_panel_clean = 0;
+    }
+    for (i = 0; i < n; i++) sc_frame[i] = (uint16_t) px[i];
+    if (sc_fmt != BSP_DISPLAY_COLOR_FORMAT_16_565RGB) {
+        sc_scale_into_back(px, w, h);
+        sc_platform_present();
+        return;
+    }
+    if (!sc_line) sc_line = (uint16_t *) malloc(sc_ph * sizeof(uint16_t));
+    if (!sc_line) return;
+    sc_present_rows();
+}
+
+static int64_t sc_platform_shown(int64_t x, int64_t y) {
+    long fx, fy;
+    if (x < 0 || y < 0 || x >= sc_bw || y >= sc_bh) return -1;
+    if (!sc_frame) return 0;
+    fx = (long) x - sc_ox;
+    fy = (long) y - sc_oy;
+    if (fx < 0 || fy < 0) return 0;
+    fx /= sc_scale;
+    fy /= sc_scale;
+    if (fx >= sc_frame_w || fy >= sc_frame_h) return 0;
+    /* A block cut by the screen's edge is not drawn, as on every other platform. */
+    if (sc_ox + fx * sc_scale < 0 || sc_oy + fy * sc_scale < 0) return 0;
+    if (sc_ox + (fx + 1) * sc_scale > sc_bw || sc_oy + (fy + 1) * sc_scale > sc_bh) return 0;
+    return sc_frame[(size_t) fy * (size_t) sc_frame_w + (size_t) fx];
+}
+
 static void sc_platform_wait(int wait_ms) {
     if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
 }
 
+/* Closing leaves the panel black, so what comes next (the launcher, another screen) starts
+ * from nothing. */
 static void sc_platform_close(void) {
+    if (sc_panel) {
+        memset(sc_panel, 0, sc_ph * sc_pv * (sc_fmt == BSP_DISPLAY_COLOR_FORMAT_16_565RGB ? 2 : 3));
+        bsp_display_blit(0, 0, sc_ph, sc_pv, sc_panel);
+        bsp_display_wait(100);
+    }
     free(sc_panel);
     sc_panel = NULL;
+    free(sc_frame);
+    sc_frame = NULL;
+    sc_frame_w = sc_frame_h = 0;
+    free(sc_line);
+    sc_line = NULL;
+    sc_panel_clean = 0;
 }
 
 #elif !defined(__wasm__) && !defined(_WIN32) && !defined(__APPLE__) && defined(__has_include)
