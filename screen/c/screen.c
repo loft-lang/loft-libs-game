@@ -8,7 +8,9 @@
  *   X11 (Linux, BSDs): a window; libX11 is opened at run time, so building needs only its
  *        headers and running without a display just answers "no screen".
  *   Tanmatsu (ESP_PLATFORM): the BSP's display, the frame rotated into the portrait panel.
- *   Elsewhere (wasm, Windows, macOS): none yet — sc_open answers 0.
+ *   A browser page (`--native-c --html`, where loft defines LOFT_BROWSER): the page's canvas
+ *        through loft's `loft_gl` imports, the frame scaled up by the GPU.
+ *   Elsewhere (a WASI module, Windows, macOS): none yet — sc_open answers 0.
  *
  * Mode 1 of sc_open is OFF-SCREEN on every platform: the back buffer only, which is how the
  * scaling is tested where there is no display.
@@ -42,9 +44,9 @@ static unsigned char sc_keys[256];
 static int sc_have_keys = 0;
 static int sc_alive = 0;
 
-/* Scale the frame `px` (w x h, RGB565) by sc_scale into the back buffer, centred; what the
- * frame does not cover is black. */
-static void sc_scale_into_back(const int32_t *px, int w, int h) {
+/* Scale a frame (w x h RGB565 values, from `px32` or `px16`, whichever is not null) by sc_scale
+ * into the back buffer, centred; what the frame does not cover is black. */
+static void sc_scale_from(const int32_t *px32, const uint16_t *px16, int w, int h) {
     int ox = (sc_bw - w * sc_scale) / 2, oy = (sc_bh - h * sc_scale) / 2, y;
     memset(sc_back, 0, (size_t) sc_bw * (size_t) sc_bh * sizeof(uint16_t));
     for (y = 0; y < h; y++) {
@@ -53,13 +55,19 @@ static void sc_scale_into_back(const int32_t *px, int w, int h) {
         if (by < 0 || by + sc_scale > sc_bh) continue;
         row = sc_back + (size_t) by * (size_t) sc_bw;
         for (x = 0; x < w; x++) {
-            uint16_t c = (uint16_t) px[(size_t) y * (size_t) w + (size_t) x];
+            size_t at = (size_t) y * (size_t) w + (size_t) x;
+            uint16_t c = px16 ? px16[at] : (uint16_t) px32[at];
             int bx = ox + x * sc_scale;
             if (bx < 0 || bx + sc_scale > sc_bw) continue;
             for (k = 0; k < sc_scale; k++) row[bx + k] = c;
         }
         for (k = 1; k < sc_scale; k++) memcpy(row + (size_t) k * (size_t) sc_bw, row, (size_t) sc_bw * sizeof(uint16_t));
     }
+}
+
+/* The frame `px` scaled into the back buffer. */
+static void sc_scale_into_back(const int32_t *px, int w, int h) {
+    sc_scale_from(px, NULL, w, h);
 }
 
 static int sc_make_back(int w, int h) {
@@ -77,12 +85,59 @@ static int sc_platform_open(const char *title);
 static void sc_platform_present(void);
 static void sc_platform_wait(int wait_ms);
 static void sc_platform_close(void);
-#if defined(ESP_PLATFORM)
-/* The Tanmatsu writes the panel straight from the frame, with no back buffer between: the
- * back buffer is the scaled picture a desktop window shows, and the panel is that picture
- * turned.  `shown` reads the same picture from the frame it keeps. */
-static void sc_platform_present_frame(const int32_t *px, int w, int h);
-static int64_t sc_platform_shown(int64_t x, int64_t y);
+/* A machine that shows the frame itself rather than the back buffer — the Tanmatsu's panel,
+ * written straight from the frame and turned; a page, whose GPU scales the frame — keeps the
+ * last frame and where its scaled picture sits on the screen, and `shown` reads that.  The back
+ * buffer then serves off-screen mode only. */
+#if defined(ESP_PLATFORM) || (defined(__wasm__) && defined(LOFT_BROWSER))
+#define SC_FRAME_PATH 1
+static uint16_t *sc_frame = NULL;
+static int sc_frame_w = 0, sc_frame_h = 0, sc_ox = 0, sc_oy = 0;
+
+/* Keep frame `px`: 1 when its size (and so where it sits) changed, 0 when not, -1 when there is
+ * no memory for it. */
+static int sc_keep_frame(const int32_t *px, int w, int h) {
+    size_t i, n = (size_t) w * (size_t) h;
+    int changed = 0;
+    if (w != sc_frame_w || h != sc_frame_h || !sc_frame) {
+        uint16_t *f = (uint16_t *) realloc(sc_frame, n * sizeof(uint16_t));
+        if (!f) return -1;
+        sc_frame = f;
+        sc_frame_w = w;
+        sc_frame_h = h;
+        sc_ox = (sc_bw - w * sc_scale) / 2;
+        sc_oy = (sc_bh - h * sc_scale) / 2;
+        changed = 1;
+    }
+    for (i = 0; i < n; i++) sc_frame[i] = (uint16_t) px[i];
+    return changed;
+}
+
+static void sc_drop_frame(void) {
+    free(sc_frame);
+    sc_frame = NULL;
+    sc_frame_w = sc_frame_h = 0;
+}
+
+/* The value shown at screen pixel (x, y): the kept frame's, black around it, -1 off the screen. */
+static int64_t sc_frame_shown(int64_t x, int64_t y) {
+    long fx, fy;
+    if (x < 0 || y < 0 || x >= sc_bw || y >= sc_bh) return -1;
+    if (!sc_frame) return 0;
+    fx = (long) x - sc_ox;
+    fy = (long) y - sc_oy;
+    if (fx < 0 || fy < 0) return 0;
+    fx /= sc_scale;
+    fy /= sc_scale;
+    if (fx >= sc_frame_w || fy >= sc_frame_h) return 0;
+    /* A block cut by the screen's edge is not drawn, as on every other platform. */
+    if (sc_ox + fx * sc_scale < 0 || sc_oy + fy * sc_scale < 0) return 0;
+    if (sc_ox + (fx + 1) * sc_scale > sc_bw || sc_oy + (fy + 1) * sc_scale > sc_bh) return 0;
+    return sc_frame[(size_t) fy * (size_t) sc_frame_w + (size_t) fx];
+}
+
+/* The platform shows the kept frame; `changed` says its size or place changed since the last. */
+static void sc_platform_present_frame(int changed);
 #endif
 
 int64_t sc_open(int64_t w, int64_t h, int64_t scale, int64_t mode, const char *title) {
@@ -110,6 +165,9 @@ int64_t sc_open(int64_t w, int64_t h, int64_t scale, int64_t mode, const char *t
 
 void sc_close(void) {
     if (sc_open_mode == 0) sc_platform_close();
+#if defined(SC_FRAME_PATH)
+    sc_drop_frame();
+#endif
     sc_open_mode = -1;
     sc_alive = 0;
     sc_have_keys = 0;
@@ -123,9 +181,10 @@ void sc_show(const int32_t *px, int64_t n, int64_t w, int64_t h) {
         sc_fw = (int) w;
         sc_fh = (int) h;
     }
-#if defined(ESP_PLATFORM)
+#if defined(SC_FRAME_PATH)
     if (sc_open_mode == 0) {
-        sc_platform_present_frame(px, (int) w, (int) h);
+        int changed = sc_keep_frame(px, (int) w, (int) h);
+        if (changed >= 0) sc_platform_present_frame(changed);
         return;
     }
 #endif
@@ -143,8 +202,8 @@ int64_t sc_has_keys(void) { return sc_open_mode == 0 && sc_have_keys; }
 int64_t sc_key(int64_t code) { return code > 0 && code < 256 && sc_keys[code]; }
 
 int64_t sc_shown(int64_t x, int64_t y) {
-#if defined(ESP_PLATFORM)
-    if (sc_open_mode == 0) return sc_platform_shown(x, y);
+#if defined(SC_FRAME_PATH)
+    if (sc_open_mode == 0) return sc_frame_shown(x, y);
 #endif
     if (!sc_back || x < 0 || y < 0 || x >= sc_bw || y >= sc_bh) return -1;
     return sc_back[(size_t) y * (size_t) sc_bw + (size_t) x];
@@ -223,10 +282,6 @@ static void sc_platform_present(void) {
     bsp_display_blit(0, 0, sc_ph, sc_pv, sc_panel);
 }
 
-/* The last frame shown, as RGB565, and where its scaled picture sits on the landscape screen:
- * what `shown` reads, and what tells a new frame size from the last one. */
-static uint16_t *sc_frame = NULL;
-static int sc_frame_w = 0, sc_frame_h = 0, sc_ox = 0, sc_oy = 0;
 static int sc_panel_clean = 0;      /* the panel outside the frame is black and blitted */
 static uint16_t *sc_line = NULL;    /* one landscape row or column, sc_ph long */
 
@@ -296,45 +351,20 @@ static void sc_present_rows(void) {
     }
 }
 
-static void sc_platform_present_frame(const int32_t *px, int w, int h) {
-    size_t i, n = (size_t) w * (size_t) h;
-    if (w != sc_frame_w || h != sc_frame_h || !sc_frame) {
-        uint16_t *f = (uint16_t *) realloc(sc_frame, n * sizeof(uint16_t));
-        if (!f) return;
-        sc_frame = f;
-        sc_frame_w = w;
-        sc_frame_h = h;
-        sc_ox = (sc_bw - w * sc_scale) / 2;
-        sc_oy = (sc_bh - h * sc_scale) / 2;
+static void sc_platform_present_frame(int changed) {
+    if (changed) {
         /* A new size can leave the old picture outside the new one: start from black. */
         memset(sc_panel, 0, sc_ph * sc_pv * (sc_fmt == BSP_DISPLAY_COLOR_FORMAT_16_565RGB ? 2 : 3));
         sc_panel_clean = 0;
     }
-    for (i = 0; i < n; i++) sc_frame[i] = (uint16_t) px[i];
     if (sc_fmt != BSP_DISPLAY_COLOR_FORMAT_16_565RGB) {
-        sc_scale_into_back(px, w, h);
+        sc_scale_from(NULL, sc_frame, sc_frame_w, sc_frame_h);
         sc_platform_present();
         return;
     }
     if (!sc_line) sc_line = (uint16_t *) malloc(sc_ph * sizeof(uint16_t));
     if (!sc_line) return;
     sc_present_rows();
-}
-
-static int64_t sc_platform_shown(int64_t x, int64_t y) {
-    long fx, fy;
-    if (x < 0 || y < 0 || x >= sc_bw || y >= sc_bh) return -1;
-    if (!sc_frame) return 0;
-    fx = (long) x - sc_ox;
-    fy = (long) y - sc_oy;
-    if (fx < 0 || fy < 0) return 0;
-    fx /= sc_scale;
-    fy /= sc_scale;
-    if (fx >= sc_frame_w || fy >= sc_frame_h) return 0;
-    /* A block cut by the screen's edge is not drawn, as on every other platform. */
-    if (sc_ox + fx * sc_scale < 0 || sc_oy + fy * sc_scale < 0) return 0;
-    if (sc_ox + (fx + 1) * sc_scale > sc_bw || sc_oy + (fy + 1) * sc_scale > sc_bh) return 0;
-    return sc_frame[(size_t) fy * (size_t) sc_frame_w + (size_t) fx];
 }
 
 static void sc_platform_wait(int wait_ms) {
@@ -351,9 +381,6 @@ static void sc_platform_close(void) {
     }
     free(sc_panel);
     sc_panel = NULL;
-    free(sc_frame);
-    sc_frame = NULL;
-    sc_frame_w = sc_frame_h = 0;
     free(sc_line);
     sc_line = NULL;
     sc_panel_clean = 0;
@@ -541,9 +568,184 @@ static void sc_platform_close(void) {
     sc_dpy = NULL;
 }
 
+#elif defined(__wasm__) && defined(LOFT_BROWSER)
+
+/* ── A browser page: the canvas, through the page's `loft_gl` imports (loft's
+ * doc/loft-gl-wasm.js).  The kept frame goes up as one texture, its RGB565 widened exactly as
+ * the X11 window widens it, and the GPU draws it scaled by nearest neighbour where its picture
+ * sits, so the page shows the pixels a desktop window shows.  `poll` hands the browser a frame
+ * (`gg_present` suspends the program until the next one) and takes the page's key events,
+ * which arrive in graphics' key codes. ── */
+#define SC_IMPORT(name) __attribute__((import_module("loft_gl"), import_name(#name)))
+SC_IMPORT(gg_js_open) int sc_js_open(int width, int height, int fullscreen);
+SC_IMPORT(gg_js_size) int sc_js_size(int which);
+SC_IMPORT(gg_present) void sc_js_present(void);
+SC_IMPORT(gg_js_event) int sc_js_event(int *out, char *text, int cap);
+SC_IMPORT(gg_glViewport) void sc_glViewport(int, int, int, int);
+SC_IMPORT(gg_glClearColor) void sc_glClearColor(float, float, float, float);
+SC_IMPORT(gg_glClear) void sc_glClear(unsigned);
+SC_IMPORT(gg_glCreateShader) unsigned sc_glCreateShader(unsigned);
+SC_IMPORT(gg_glShaderSource) void sc_glShaderSource(unsigned, int, const char *const *, const int *);
+SC_IMPORT(gg_glCompileShader) void sc_glCompileShader(unsigned);
+SC_IMPORT(gg_glCreateProgram) unsigned sc_glCreateProgram(void);
+SC_IMPORT(gg_glAttachShader) void sc_glAttachShader(unsigned, unsigned);
+SC_IMPORT(gg_glLinkProgram) void sc_glLinkProgram(unsigned);
+SC_IMPORT(gg_glUseProgram) void sc_glUseProgram(unsigned);
+SC_IMPORT(gg_glGetUniformLocation) int sc_glGetUniformLocation(unsigned, const char *);
+SC_IMPORT(gg_glUniform1i) void sc_glUniform1i(int, int);
+SC_IMPORT(gg_glUniform4f) void sc_glUniform4f(int, float, float, float, float);
+SC_IMPORT(gg_glGenTextures) void sc_glGenTextures(int, unsigned *);
+SC_IMPORT(gg_glBindTexture) void sc_glBindTexture(unsigned, unsigned);
+SC_IMPORT(gg_glActiveTexture) void sc_glActiveTexture(unsigned);
+SC_IMPORT(gg_glTexImage2D) void sc_glTexImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+SC_IMPORT(gg_glTexSubImage2D) void sc_glTexSubImage2D(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
+SC_IMPORT(gg_glTexParameteri) void sc_glTexParameteri(unsigned, unsigned, int);
+SC_IMPORT(gg_glGenVertexArrays) void sc_glGenVertexArrays(int, unsigned *);
+SC_IMPORT(gg_glBindVertexArray) void sc_glBindVertexArray(unsigned);
+SC_IMPORT(gg_glDrawArrays) void sc_glDrawArrays(unsigned, int, int);
+
+#define SC_GL_TEXTURE_2D 0x0DE1
+#define SC_GL_TEXTURE0 0x84C0
+#define SC_GL_RGBA 0x1908
+#define SC_GL_UNSIGNED_BYTE 0x1401
+#define SC_GL_NEAREST 0x2600
+#define SC_GL_CLAMP_TO_EDGE 0x812F
+#define SC_GL_MAG_FILTER 0x2800
+#define SC_GL_MIN_FILTER 0x2801
+#define SC_GL_WRAP_S 0x2802
+#define SC_GL_WRAP_T 0x2803
+#define SC_GL_COLOR_BUFFER_BIT 0x4000
+#define SC_GL_TRIANGLE_STRIP 0x0005
+#define SC_GL_VERTEX_SHADER 0x8B31
+#define SC_GL_FRAGMENT_SHADER 0x8B30
+
+static unsigned sc_prog = 0, sc_tex = 0, sc_vao = 0;
+static int sc_u_rect = -1;
+static unsigned char *sc_rgba = NULL;
+static int sc_tex_w = 0, sc_tex_h = 0;
+
+/* A quad over `u_rect` (left, top, right, bottom in clip space), its corners from the vertex
+ * number alone, the frame's first row at its top. */
+static const char *const sc_vs =
+    "#version 330 core\n"
+    "uniform vec4 u_rect;\n"
+    "out vec2 v_uv;\n"
+    "void main() {\n"
+    "  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
+    "  v_uv = c;\n"
+    "  gl_Position = vec4(mix(u_rect.xy, u_rect.zw, c), 0.0, 1.0);\n"
+    "}\n";
+static const char *const sc_fs =
+    "#version 330 core\n"
+    "uniform sampler2D u_frame;\n"
+    "in vec2 v_uv;\n"
+    "out vec4 o_color;\n"
+    "void main() { o_color = texture(u_frame, v_uv); }\n";
+
+static unsigned sc_shader(unsigned kind, const char *src) {
+    unsigned sh = sc_glCreateShader(kind);
+    sc_glShaderSource(sh, 1, &src, NULL);
+    sc_glCompileShader(sh);
+    return sh;
+}
+
+static int sc_platform_open(const char *title) {
+    (void) title;
+    if (!sc_js_open(sc_bw, sc_bh, 0)) return 0;
+    if (!sc_prog) {
+        sc_prog = sc_glCreateProgram();
+        sc_glAttachShader(sc_prog, sc_shader(SC_GL_VERTEX_SHADER, sc_vs));
+        sc_glAttachShader(sc_prog, sc_shader(SC_GL_FRAGMENT_SHADER, sc_fs));
+        sc_glLinkProgram(sc_prog);
+        sc_glGenTextures(1, &sc_tex);
+        sc_glGenVertexArrays(1, &sc_vao);
+    }
+    sc_glUseProgram(sc_prog);
+    sc_u_rect = sc_glGetUniformLocation(sc_prog, "u_rect");
+    sc_glUniform1i(sc_glGetUniformLocation(sc_prog, "u_frame"), 0);
+    sc_glActiveTexture(SC_GL_TEXTURE0);
+    sc_glBindTexture(SC_GL_TEXTURE_2D, sc_tex);
+    sc_glTexParameteri(SC_GL_TEXTURE_2D, SC_GL_MAG_FILTER, SC_GL_NEAREST);
+    sc_glTexParameteri(SC_GL_TEXTURE_2D, SC_GL_MIN_FILTER, SC_GL_NEAREST);
+    sc_glTexParameteri(SC_GL_TEXTURE_2D, SC_GL_WRAP_S, SC_GL_CLAMP_TO_EDGE);
+    sc_glTexParameteri(SC_GL_TEXTURE_2D, SC_GL_WRAP_T, SC_GL_CLAMP_TO_EDGE);
+    sc_tex_w = sc_tex_h = 0;
+    sc_have_keys = 1;
+    return 1;
+}
+
+/* Draw the kept frame: widened into RGBA, uploaded, and drawn over where its picture sits on the
+ * back buffer's screen; the rest of the canvas black. */
+static void sc_platform_present_frame(int changed) {
+    size_t i, n = (size_t) sc_frame_w * (size_t) sc_frame_h;
+    float l, t, r, b;
+    (void) changed;
+    if (sc_frame_w != sc_tex_w || sc_frame_h != sc_tex_h) {
+        unsigned char *p = (unsigned char *) realloc(sc_rgba, n * 4);
+        if (!p) return;
+        sc_rgba = p;
+    }
+    for (i = 0; i < n; i++) {
+        uint16_t c = sc_frame[i];
+        sc_rgba[i * 4] = (unsigned char) (((c >> 11) & 31) * 255 / 31);
+        sc_rgba[i * 4 + 1] = (unsigned char) (((c >> 5) & 63) * 255 / 63);
+        sc_rgba[i * 4 + 2] = (unsigned char) ((c & 31) * 255 / 31);
+        sc_rgba[i * 4 + 3] = 255;
+    }
+    if (sc_frame_w != sc_tex_w || sc_frame_h != sc_tex_h) {
+        sc_glTexImage2D(SC_GL_TEXTURE_2D, 0, SC_GL_RGBA, sc_frame_w, sc_frame_h, 0, SC_GL_RGBA, SC_GL_UNSIGNED_BYTE, sc_rgba);
+        sc_tex_w = sc_frame_w;
+        sc_tex_h = sc_frame_h;
+    } else {
+        sc_glTexSubImage2D(SC_GL_TEXTURE_2D, 0, 0, 0, sc_frame_w, sc_frame_h, SC_GL_RGBA, SC_GL_UNSIGNED_BYTE, sc_rgba);
+    }
+    sc_glViewport(0, 0, sc_js_size(0), sc_js_size(1));
+    sc_glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    sc_glClear(SC_GL_COLOR_BUFFER_BIT);
+    l = -1.0f + 2.0f * (float) sc_ox / (float) sc_bw;
+    r = -1.0f + 2.0f * (float) (sc_ox + sc_frame_w * sc_scale) / (float) sc_bw;
+    t = 1.0f - 2.0f * (float) sc_oy / (float) sc_bh;
+    b = 1.0f - 2.0f * (float) (sc_oy + sc_frame_h * sc_scale) / (float) sc_bh;
+    sc_glUseProgram(sc_prog);
+    sc_glBindVertexArray(sc_vao);
+    sc_glUniform4f(sc_u_rect, l, t, r, b);
+    sc_glDrawArrays(SC_GL_TRIANGLE_STRIP, 0, 4);
+}
+
+/* The back-buffer path is off-screen mode's alone here. */
+static void sc_platform_present(void) { }
+
+/* The page's events since the last call: a key down or up by graphics' code. */
+static void sc_take_events(void) {
+    int v[5];
+    char text[64];
+    int tag;
+    while ((tag = sc_js_event(v, text, (int) sizeof text)) != 0) {
+        if ((tag == 1 || tag == 2) && v[0] > 0 && v[0] < 256) sc_keys[v[0]] = tag == 1;
+    }
+}
+
+/* Take what happened, and with a wait hand the browser a frame: the program is suspended until
+ * the next one, which is the page's pace (a wait shorter than a frame is a frame). */
+static void sc_platform_wait(int wait_ms) {
+    sc_take_events();
+    if (wait_ms > 0) {
+        sc_js_present();
+        sc_take_events();
+    }
+}
+
+static void sc_platform_close(void) {
+    sc_glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    sc_glClear(SC_GL_COLOR_BUFFER_BIT);
+    free(sc_rgba);
+    sc_rgba = NULL;
+    sc_tex_w = sc_tex_h = 0;
+}
+
 #elif !defined(ESP_PLATFORM)
 
-/* ── No screen here yet (the browser, Windows, macOS): sc_open answers 0. ── */
+/* ── No screen here yet (a WASI module, Windows, macOS): sc_open answers 0. ── */
 static int sc_platform_open(const char *title) {
     (void) title;
     return 0;
