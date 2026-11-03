@@ -38,7 +38,10 @@ int64_t sc_height(void);
 static uint16_t *sc_back = NULL;
 static int sc_bw = 0, sc_bh = 0;    /* the back buffer's size */
 static int sc_fw = 0, sc_fh = 0;    /* the frame's size */
-static int sc_scale = 1;
+static int sc_scale = 1;            /* the scale the frame is shown at */
+static int sc_want_scale = 1;       /* the scale asked for: a frame too large for it is shown at
+                                     * the largest whole scale that fits, a display-sized one 1:1 */
+static int sc_fill = 0;             /* the screen fills the display (a page: the whole window) */
 static int sc_open_mode = -1;       /* -1 closed, 0 on screen, 1 off-screen */
 static unsigned char sc_keys[256];
 static int sc_have_keys = 0;
@@ -145,7 +148,8 @@ int64_t sc_open(int64_t w, int64_t h, int64_t scale, int64_t mode, const char *t
     sc_close();
     sc_fw = (int) w;
     sc_fh = (int) h;
-    sc_scale = (int) scale;
+    sc_scale = sc_want_scale = (int) scale;
+    sc_fill = mode == 2;
     memset(sc_keys, 0, sizeof sc_keys);
     if (!sc_make_back((int) (w * scale), (int) (h * scale))) return 0;
     if (mode == 1) {
@@ -176,10 +180,19 @@ void sc_close(void) {
 }
 
 void sc_show(const int32_t *px, int64_t n, int64_t w, int64_t h) {
+    int k = sc_want_scale;
     if (sc_open_mode < 0 || w <= 0 || h <= 0 || n < w * h) return;
     if (w != sc_fw || h != sc_fh) {
         sc_fw = (int) w;
         sc_fh = (int) h;
+    }
+    /* A frame drawn at the screen's own resolution is shown as it is. */
+    while (k > 1 && (w * k > sc_bw || h * k > sc_bh)) k--;
+    if (k != sc_scale) {
+        sc_scale = k;
+#if defined(SC_FRAME_PATH)
+        sc_frame_w = sc_frame_h = 0;   /* where the frame sits moves with its scale */
+#endif
     }
 #if defined(SC_FRAME_PATH)
     if (sc_open_mode == 0) {
@@ -651,7 +664,9 @@ static unsigned sc_shader(unsigned kind, const char *src) {
 
 static int sc_platform_open(const char *title) {
     (void) title;
-    if (!sc_js_open(sc_bw, sc_bh, 0)) return 0;
+    if (!sc_js_open(sc_bw, sc_bh, sc_fill)) return 0;
+    /* Filling the window, the screen is the canvas's size in device pixels. */
+    if (sc_fill && !sc_make_back(sc_js_size(0), sc_js_size(1))) return 0;
     if (!sc_prog) {
         sc_prog = sc_glCreateProgram();
         sc_glAttachShader(sc_prog, sc_shader(SC_GL_VERTEX_SHADER, sc_vs));
@@ -715,13 +730,15 @@ static void sc_platform_present_frame(int changed) {
 /* The back-buffer path is off-screen mode's alone here. */
 static void sc_platform_present(void) { }
 
-/* The page's events since the last call: a key down or up by graphics' code. */
+/* The page's events since the last call: a key down or up by graphics' code, and a window
+ * resized (the screen takes the canvas's new size; `width` and `height` answer it). */
 static void sc_take_events(void) {
     int v[5];
     char text[64];
     int tag;
     while ((tag = sc_js_event(v, text, (int) sizeof text)) != 0) {
         if ((tag == 1 || tag == 2) && v[0] > 0 && v[0] < 256) sc_keys[v[0]] = tag == 1;
+        if (tag == 8 && v[0] > 0 && v[1] > 0 && sc_make_back(v[0], v[1])) sc_frame_w = sc_frame_h = 0;
     }
 }
 
