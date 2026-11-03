@@ -82,7 +82,8 @@ pub fn rate() -> integer {
   ae_rate()
 }
 
-/// Does this build decode OGG Vorbis?  Every target but the two wasm builds does.
+/// Does this build decode OGG Vorbis?  Every target but the freestanding wasm build (the Rust
+/// writer's page) does.
 pub fn has_vorbis() -> boolean {
   ae_vorbis() != 0
 }
