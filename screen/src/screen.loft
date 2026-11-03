@@ -32,6 +32,12 @@ fn sc_width() -> integer;
 #c "sc_width" "int64_t(void)"
 fn sc_height() -> integer;
 #c "sc_height" "int64_t(void)"
+fn sc_pointer(which: integer) -> integer;
+#c "sc_pointer" "int64_t(int64_t)"
+fn sc_text() -> text;
+#c "sc_text" "const char*(void)"
+fn sc_text_taken();
+#c "sc_text_taken" "void(void)"
 
 /// Open the screen for frames of `width` by `height` pixels, each shown as a `scale` by
 /// `scale` block.  On a desktop that is a window of that size titled `title`; on a device it is
@@ -91,4 +97,33 @@ pub fn height() -> integer {
 /// Close the screen.
 pub fn close() {
   sc_close();
+}
+
+/// Whether this screen has a pointer: a desktop window's mouse, a page's mouse or touch.  The
+/// Tanmatsu has none — a program for it works from the keyboard alone.
+pub fn has_pointer() -> boolean {
+  sc_pointer(4) != 0
+}
+
+/// Where the pointer is, in the screen's pixels (`width()` x `height()`), as `poll` last saw it.
+pub fn pointer() -> (integer, integer) {
+  (sc_pointer(0), sc_pointer(1))
+}
+
+/// The pointer's buttons held down: 1 the left, 2 the right, 4 the middle, added together.
+pub fn buttons() -> integer {
+  sc_pointer(2)
+}
+
+/// The wheel's notches since this was last asked (up is positive).
+pub fn wheel() -> integer {
+  sc_pointer(3)
+}
+
+/// The text typed since this was last asked — what the keys wrote, with the keyboard's layout
+/// and shift applied, as opposed to which keys are down.
+pub fn typed() -> text {
+  t = "{sc_text()}";
+  sc_text_taken();
+  t
 }

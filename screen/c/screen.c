@@ -32,6 +32,9 @@ int64_t sc_key(int64_t code);
 int64_t sc_shown(int64_t x, int64_t y);
 int64_t sc_width(void);
 int64_t sc_height(void);
+int64_t sc_pointer(int64_t which);
+const char *sc_text(void);
+void sc_text_taken(void);
 
 /* ── Shared: the back buffer, one RGB565 value per screen pixel ── */
 
@@ -45,6 +48,18 @@ static int sc_fill = 0;             /* the screen fills the display (a page: the
 static int sc_open_mode = -1;       /* -1 closed, 0 on screen, 1 off-screen */
 static unsigned char sc_keys[256];
 static int sc_have_keys = 0;
+/* The pointer, where the screen has one: its pixel, its buttons (1 left, 2 right, 4 middle), the
+ * wheel's notches since `poll` last answered, and the text typed since then, UTF-8. */
+static int sc_px = 0, sc_py = 0, sc_buttons = 0, sc_wheel = 0, sc_have_pointer = 0;
+static char sc_typed[256];
+static int sc_typed_n = 0;
+
+static void sc_type(const char *t, int n) {
+    if (n <= 0 || sc_typed_n + n >= (int) sizeof sc_typed) return;
+    memcpy(sc_typed + sc_typed_n, t, (size_t) n);
+    sc_typed_n += n;
+    sc_typed[sc_typed_n] = 0;
+}
 static int sc_alive = 0;
 
 /* Scale a frame (w x h RGB565 values, from `px32` or `px16`, whichever is not null) by sc_scale
@@ -175,6 +190,9 @@ void sc_close(void) {
     sc_open_mode = -1;
     sc_alive = 0;
     sc_have_keys = 0;
+    sc_have_pointer = 0;
+    sc_buttons = sc_wheel = 0;
+    sc_typed_n = 0;
     free(sc_back);
     sc_back = NULL;
 }
@@ -223,6 +241,25 @@ int64_t sc_shown(int64_t x, int64_t y) {
 }
 
 int64_t sc_width(void) { return sc_bw; }
+
+/* 0 the pointer's x, 1 its y, 2 its buttons, 3 the wheel's notches since the last call (then 0),
+ * 4 whether this screen has a pointer at all. */
+int64_t sc_pointer(int64_t which) {
+    int w;
+    switch (which) {
+    case 0: return sc_px;
+    case 1: return sc_py;
+    case 2: return sc_buttons;
+    case 3: w = sc_wheel; sc_wheel = 0; return w;
+    case 4: return sc_open_mode == 0 && sc_have_pointer;
+    }
+    return 0;
+}
+
+/* The text typed since it was last taken. */
+const char *sc_text(void) { sc_typed[sc_typed_n] = 0; return sc_typed; }
+
+void sc_text_taken(void) { sc_typed_n = 0; sc_typed[0] = 0; }
 
 int64_t sc_height(void) { return sc_bh; }
 
@@ -433,6 +470,7 @@ static struct {
     int (*p_Pending)(Display *);
     int (*p_NextEvent)(Display *, XEvent *);
     KeySym (*p_LookupKeysym)(XKeyEvent *, int);
+    int (*p_LookupString)(XKeyEvent *, char *, int, KeySym *, XComposeStatus *);
     int (*p_DestroyWindow)(Display *, Window);
     int (*p_ConnectionNumber)(Display *);
     int (*p_DefaultScreen)(Display *);
@@ -457,7 +495,7 @@ static int sc_load_x11(void) {
     SC_SYM(OpenDisplay); SC_SYM(CloseDisplay); SC_SYM(CreateSimpleWindow); SC_SYM(StoreName);
     SC_SYM(SelectInput); SC_SYM(MapWindow); SC_SYM(InternAtom); SC_SYM(SetWMProtocols);
     SC_SYM(CreateGC); SC_SYM(FreeGC); SC_SYM(CreateImage); SC_SYM(PutImage); SC_SYM(Flush);
-    SC_SYM(Pending); SC_SYM(NextEvent); SC_SYM(LookupKeysym); SC_SYM(DestroyWindow);
+    SC_SYM(Pending); SC_SYM(NextEvent); SC_SYM(LookupKeysym); SC_SYM(LookupString); SC_SYM(DestroyWindow);
     SC_SYM(ConnectionNumber); SC_SYM(DefaultScreen); SC_SYM(RootWindow); SC_SYM(DefaultVisual);
     SC_SYM(DefaultDepth); SC_SYM(Free);
 #undef SC_SYM
@@ -507,7 +545,8 @@ static int sc_platform_open(const char *title) {
     }
     sc_win = X.p_CreateSimpleWindow(sc_dpy, X.p_RootWindow(sc_dpy, scr), 0, 0, (unsigned) sc_bw, (unsigned) sc_bh, 0, 0, 0);
     X.p_StoreName(sc_dpy, sc_win, title && *title ? title : "loft");
-    X.p_SelectInput(sc_dpy, sc_win, ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask | FocusChangeMask);
+    X.p_SelectInput(sc_dpy, sc_win, ExposureMask | KeyPressMask | KeyReleaseMask | StructureNotifyMask |
+                                        FocusChangeMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask);
     sc_wm_delete = X.p_InternAtom(sc_dpy, "WM_DELETE_WINDOW", False);
     X.p_SetWMProtocols(sc_dpy, sc_win, &sc_wm_delete, 1);
     sc_gc = X.p_CreateGC(sc_dpy, sc_win, 0, NULL);
@@ -518,6 +557,7 @@ static int sc_platform_open(const char *title) {
     X.p_MapWindow(sc_dpy, sc_win);
     X.p_Flush(sc_dpy);
     sc_have_keys = 1;
+    sc_have_pointer = 1;
     return 1;
 }
 
@@ -541,6 +581,28 @@ static void sc_platform_wait(int wait_ms) {
             if (e.type == KeyPress || e.type == KeyRelease) {
                 int code = sc_code(X.p_LookupKeysym(&e.xkey, 0));
                 if (code > 0) sc_keys[code] = e.type == KeyPress;
+                if (e.type == KeyPress) {
+                    /* What the key types, in Latin-1, widened to UTF-8. */
+                    char t[16], u[32];
+                    int n = X.p_LookupString(&e.xkey, t, (int) sizeof t, NULL, NULL), i, k = 0;
+                    for (i = 0; i < n; i++) {
+                        unsigned char ch = (unsigned char) t[i];
+                        if (ch < 128) u[k++] = (char) ch;
+                        else { u[k++] = (char) (0xC0 | (ch >> 6)); u[k++] = (char) (0x80 | (ch & 63)); }
+                    }
+                    sc_type(u, k);
+                }
+            } else if (e.type == ButtonPress || e.type == ButtonRelease) {
+                /* X's buttons: 1 left, 2 middle, 3 right, 4 and 5 the wheel. */
+                int b = e.xbutton.button == 1 ? 1 : e.xbutton.button == 3 ? 2 : e.xbutton.button == 2 ? 4 : 0;
+                sc_px = e.xbutton.x;
+                sc_py = e.xbutton.y;
+                if (b) sc_buttons = e.type == ButtonPress ? sc_buttons | b : sc_buttons & ~b;
+                if (e.type == ButtonPress && e.xbutton.button == 4) sc_wheel++;
+                if (e.type == ButtonPress && e.xbutton.button == 5) sc_wheel--;
+            } else if (e.type == MotionNotify) {
+                sc_px = e.xmotion.x;
+                sc_py = e.xmotion.y;
             } else if (e.type == Expose) {
                 sc_platform_present();
             } else if (e.type == FocusOut) {
@@ -686,6 +748,7 @@ static int sc_platform_open(const char *title) {
     sc_glTexParameteri(SC_GL_TEXTURE_2D, SC_GL_WRAP_T, SC_GL_CLAMP_TO_EDGE);
     sc_tex_w = sc_tex_h = 0;
     sc_have_keys = 1;
+    sc_have_pointer = 1;
     return 1;
 }
 
@@ -738,6 +801,17 @@ static void sc_take_events(void) {
     int tag;
     while ((tag = sc_js_event(v, text, (int) sizeof text)) != 0) {
         if ((tag == 1 || tag == 2) && v[0] > 0 && v[0] < 256) sc_keys[v[0]] = tag == 1;
+        if (tag == 3) sc_type(text, v[0] < (int) sizeof text ? v[0] : (int) sizeof text);
+        if (tag == 4 || tag == 5) {
+            sc_px = v[1];
+            sc_py = v[2];
+            sc_buttons = tag == 4 ? sc_buttons | v[0] : sc_buttons & ~v[0];
+        }
+        if (tag == 6) {
+            sc_px = v[0];
+            sc_py = v[1];
+        }
+        if (tag == 7) sc_wheel += v[0];
         if (tag == 8 && v[0] > 0 && v[1] > 0 && sc_make_back(v[0], v[1])) sc_frame_w = sc_frame_h = 0;
     }
 }
