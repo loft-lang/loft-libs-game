@@ -25,9 +25,9 @@ shim = "c/audio_engine.c"
 kind       = "vendored"
 path       = "c/vendor/miniaudio"
 upstream   = "https://github.com/mackron/miniaudio"
-commit     = "4a5b74bef029b3592c54b6048650ee5f972c1a48"
-version    = "0.11.21"
-digest     = "sha256:e4d7c2f6d85a1d5b2b3067f709ab528545e4f4702d194255d2bb95e35cf35570"
+commit     = "877ea4a7c2601c7b0f2a44e83dfac42e6470fea6"
+version    = "0.11.26"
+digest     = "sha256:effa2867cf3c10ca28ad3c2beebbef5d1546ba073c14ca95dff01e8cc9e9664a"
 advisories = ["nvd:miniaudio", "osv:commit", "github:mackron/miniaudio"]
 
 [thirdparty.miniaudio.reviewed]
@@ -37,13 +37,16 @@ CVE-2024-41147 = "not-reached: dr_flac is compiled out (MA_NO_DECODING); ma_dr_f
 CVE-2026-32837 = "not-reached: the WAV BEXT parser is dr_wav, compiled out (MA_NO_DECODING); no bext or codingHistory code in the preprocessed build"
 
 [thirdparty.stb_vorbis]
-kind       = "vendored"
-path       = "c/vendor/stb_vorbis"
-upstream   = "https://github.com/nothings/stb"
-commit     = "2c980bb59875b0d32144a71867fbdebb2f77cd20"
-version    = "1.22"
-digest     = "sha256:63084af8d40c39f6ecb299c5db17e5f6e298189949e00b4222167860e1f72397"
-advisories = ["nvd:stb_vorbis"]
+kind        = "vendored"
+path        = "c/vendor/stb_vorbis"
+upstream    = "https://github.com/sezero/stb"
+branch      = "stb_vorbis-sezero"
+fork-of     = "https://github.com/nothings/stb"
+fork-reason = "the original takes no fixes to stb_vorbis.c since v1.22; this branch carries the CVE-2023-456xx and CVE-2026 fixes and is what SDL_mixer, SDL_sound and libxmp ship"
+commit      = "dd0c5eccaf092012b531d69d595fb587ece79571"
+version     = "1.22+sezero"
+digest      = "sha256:ef8c756079944fed9b075101e67847396e006d1f82b01488252a572718108018"
+advisories  = ["nvd:stb_vorbis"]
 
 [thirdparty.stb_vorbis.reviewed]
 CVE-2018-1000050 = "fixed: in v1.13; our copy is v1.22"
@@ -54,17 +57,17 @@ CVE-2019-13220 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); o
 CVE-2019-13221 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
 CVE-2019-13222 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
 CVE-2019-13223 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2023-45675 = "applies: start_decoder runs on every stb_vorbis_open_memory, and the setup_malloc length check is absent from v1.22; fixed in sezero/stb branch stb_vorbis-sezero (65cae52dd)"
-CVE-2023-45676 = "applies: setup_malloc's sz+7 overflow check is absent from v1.22 (and from setup_temp_malloc); fixed in sezero/stb branch stb_vorbis-sezero (65cae52dd, cff600c55)"
-CVE-2023-45677 = "applies: the negative/INT_MAX vendor length is not rejected in v1.22; fixed in sezero/stb branch stb_vorbis-sezero (65cae52dd, cff600c55)"
-CVE-2023-45678 = "applies: our copy declares submap_floor[15] and submap_residue[15] where 16 are needed; fixed in sezero/stb branch stb_vorbis-sezero (ef93068e7)"
-CVE-2023-45679 = "applies: on an allocation failure the comment_list pointers are left set and freed in vorbis_deinit; fixed in sezero/stb branch stb_vorbis-sezero (3527d6e7f)"
-CVE-2023-45680 = "applies: comment_list_length is not reset when comment_list is NULL; fixed in sezero/stb branch stb_vorbis-sezero (3527d6e7f)"
-CVE-2023-45681 = "applies: sizeof(char*) * comment_list_length is not overflow-checked in v1.22; fixed in sezero/stb branch stb_vorbis-sezero (fd4a18c1a)"
-CVE-2023-45682 = "applies: DECODE reads with a negative var in v1.22; fixed in sezero/stb branch stb_vorbis-sezero (373de9da6)"
-CVE-2026-5316 = "applies: measured — its PoC makes our copy free an invalid pointer in setup_free (ASan SEGV, stb_vorbis.c:966) through stb_vorbis_open_memory; sezero/stb branch stb_vorbis-sezero rejects the file"
-CVE-2026-5317 = "applies: measured — its PoC overflows the comment pointer array (ASan heap-buffer-overflow) through stb_vorbis_open_memory; sezero/stb branch stb_vorbis-sezero rejects the file"
-CVE-2026-89266 = "applies: the multiplicands allocation size is truncated to int in v1.22 (nothings/stb#1933, #1947); fixed in sezero/stb branch stb_vorbis-sezero (13d26ccac)"
+CVE-2023-45675 = "fixed: in the fork we vendor (65cae52dd, before our pin)"
+CVE-2023-45676 = "fixed: in the fork we vendor (65cae52dd, cff600c55, before our pin)"
+CVE-2023-45677 = "fixed: in the fork we vendor (65cae52dd, cff600c55, before our pin)"
+CVE-2023-45678 = "fixed: in the fork we vendor (ef93068e7, before our pin)"
+CVE-2023-45679 = "fixed: in the fork we vendor (3527d6e7f, before our pin)"
+CVE-2023-45680 = "fixed: in the fork we vendor (3527d6e7f, before our pin)"
+CVE-2023-45681 = "fixed: in the fork we vendor (fd4a18c1a, before our pin)"
+CVE-2023-45682 = "fixed: in the fork we vendor (373de9da6, before our pin)"
+CVE-2026-5316 = "fixed: measured — the fork we vendor rejects its PoC cleanly under ASan, where v1.22 crashed"
+CVE-2026-5317 = "fixed: measured — the fork we vendor rejects its PoC cleanly under ASan, where v1.22 crashed"
+CVE-2026-89266 = "fixed: in the fork we vendor (13d26ccac, before our pin)"
 
 [thirdparty.audio-backends]
 kind     = "system"
