@@ -1,6 +1,6 @@
 [package]
 name    = "screen"
-version = "0.1.0"
+version = "0.1.1"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "A small frame on the machine's screen, scaled up, with the keys of its window — one API on a desktop and a device"
@@ -17,3 +17,9 @@ entry = "src/screen.loft"
 # run time) on a desktop, the BSP display on a Tanmatsu, none elsewhere yet.
 [c]
 shim = "c/screen.c"
+
+# What this package ships, compiles in or opens that it did not write (loft THIRDPARTY.md).
+[thirdparty.x11]
+kind     = "system"
+names    = ["X11"]
+provider = "the OS display server's client library (Xorg / XWayland), opened at run time"
