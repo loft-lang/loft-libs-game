@@ -306,8 +306,10 @@ static void sc_platform_present(void) {
             uint16_t c = sc_back[(size_t) y * (size_t) sc_bw + (size_t) x];
             size_t px, py, at;
             switch (sc_rot) {
-            case BSP_DISPLAY_ROTATION_90: px = sc_ph - 1 - (size_t) y; py = (size_t) x; break;
-            case BSP_DISPLAY_ROTATION_270: px = (size_t) y; py = sc_pv - 1 - (size_t) x; break;
+            /* The BSP's rotation is how far the panel is turned clockwise to stand upright
+             * (`bsp/display.h`): the Tanmatsu's 270 puts the landscape top on the panel's right. */
+            case BSP_DISPLAY_ROTATION_90: px = (size_t) y; py = sc_pv - 1 - (size_t) x; break;
+            case BSP_DISPLAY_ROTATION_270: px = sc_ph - 1 - (size_t) y; py = (size_t) x; break;
             case BSP_DISPLAY_ROTATION_180: px = sc_ph - 1 - (size_t) x; py = sc_pv - 1 - (size_t) y; break;
             default: px = (size_t) x; py = (size_t) y; break;
             }
@@ -363,10 +365,10 @@ static void sc_fill_line(uint16_t *line, long len, long at, const uint16_t *src,
 static void sc_present_rows(void) {
     int s = sc_scale;
     int turned = sc_rot == BSP_DISPLAY_ROTATION_90 || sc_rot == BSP_DISPLAY_ROTATION_270;
-    /* Landscape line `l` is panel row `l` (0, 90) or `sc_pv - 1 - l` (180, 270); along it the
-     * landscape order is the panel's (0, 270) or its reverse (90, 180). */
-    int row_back = sc_rot == BSP_DISPLAY_ROTATION_180 || sc_rot == BSP_DISPLAY_ROTATION_270;
-    int along_back = sc_rot == BSP_DISPLAY_ROTATION_90 || sc_rot == BSP_DISPLAY_ROTATION_180;
+    /* Landscape line `l` is panel row `l` (0, 270) or `sc_pv - 1 - l` (90, 180); along it the
+     * landscape order is the panel's (0, 90) or its reverse (180, 270). */
+    int row_back = sc_rot == BSP_DISPLAY_ROTATION_90 || sc_rot == BSP_DISPLAY_ROTATION_180;
+    int along_back = sc_rot == BSP_DISPLAY_ROTATION_180 || sc_rot == BSP_DISPLAY_ROTATION_270;
     long len = (long) sc_ph, at = turned ? sc_oy : sc_ox;
     long across = turned ? (long) sc_bw : (long) sc_bh, from = turned ? sc_ox : sc_oy;
     int n_along = turned ? sc_frame_h : sc_frame_w, n_across = turned ? sc_frame_w : sc_frame_h;
