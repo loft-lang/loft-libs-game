@@ -1,6 +1,6 @@
 [package]
 name    = "audio"
-version = "0.2.0"
+version = "0.2.1"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "Clips, voices and one mix: the same sound on a PC and on a 32-bit device"
@@ -19,3 +19,29 @@ entry = "src/audio.loft"
 # declarations in src/audio.loft.  No Rust crate, no rustc, no wasm bridge.
 [c]
 shim = "c/audio_engine.c"
+
+# What this package ships, compiles in or opens that it did not write (loft THIRDPARTY.md).
+[thirdparty.miniaudio]
+kind       = "vendored"
+path       = "c/vendor/miniaudio"
+upstream   = "https://github.com/mackron/miniaudio"
+commit     = "4a5b74bef029b3592c54b6048650ee5f972c1a48"
+version    = "0.11.21"
+digest     = "sha256:e4d7c2f6d85a1d5b2b3067f709ab528545e4f4702d194255d2bb95e35cf35570"
+advisories = ["nvd:miniaudio", "osv:commit", "github:mackron/miniaudio"]
+
+[thirdparty.stb_vorbis]
+kind       = "vendored"
+path       = "c/vendor/stb_vorbis"
+upstream   = "https://github.com/nothings/stb"
+commit     = "2c980bb59875b0d32144a71867fbdebb2f77cd20"
+version    = "1.22"
+digest     = "sha256:63084af8d40c39f6ecb299c5db17e5f6e298189949e00b4222167860e1f72397"
+advisories = ["nvd:stb_vorbis"]
+
+[thirdparty.audio-backends]
+kind     = "system"
+names    = ["asound", "pulse", "jack", "jack64", "sndio", "aaudio", "OpenSLES",
+            "CoreAudio", "AudioToolbox", "AudioUnit", "CoreFoundation",
+            "dsound", "winmm", "mmdevapi", "avrt", "ole32", "kernel32", "advapi32", "user32"]
+provider = "the OS sound stack (ALSA, PulseAudio, JACK, sndio, AAudio/OpenSL ES, CoreAudio, WASAPI/DirectSound/WinMM), each opened by miniaudio at run time when present"
