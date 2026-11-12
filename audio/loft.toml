@@ -1,6 +1,6 @@
 [package]
 name    = "audio"
-version = "0.2.1"
+version = "0.2.2"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "Clips, voices and one mix: the same sound on a PC and on a 32-bit device"
@@ -37,37 +37,42 @@ CVE-2024-41147 = "not-reached: dr_flac is compiled out (MA_NO_DECODING); ma_dr_f
 CVE-2026-32837 = "not-reached: the WAV BEXT parser is dr_wav, compiled out (MA_NO_DECODING); no bext or codingHistory code in the preprocessed build"
 
 [thirdparty.stb_vorbis]
-kind        = "vendored"
-path        = "c/vendor/stb_vorbis"
-upstream    = "https://github.com/sezero/stb"
-branch      = "stb_vorbis-sezero"
-fork-of     = "https://github.com/nothings/stb"
-fork-reason = "the original takes no fixes to stb_vorbis.c since v1.22; this branch carries the CVE-2023-456xx and CVE-2026 fixes and is what SDL_mixer, SDL_sound and libxmp ship"
-commit      = "dd0c5eccaf092012b531d69d595fb587ece79571"
-version     = "1.22+sezero"
-digest      = "sha256:ef8c756079944fed9b075101e67847396e006d1f82b01488252a572718108018"
-advisories  = ["nvd:stb_vorbis"]
+kind            = "vendored"
+path            = "c/vendor/stb_vorbis"
+upstream        = "https://github.com/nothings/stb"
+commit          = "6d17754ecc01e3772fd70ef4de7541277c4bf095"
+upstream-reviewed = "78770d85c4d94787a56c7859017da963bc4f3439"
+version         = "1.23"
+modified        = ["stb_vorbis.c"]
+digest          = "sha256:db7e4538102ab7b175f43a44f07c96c44e392ddf4843ba84759a63828ef70f81"
+advisories      = ["nvd:stb_vorbis"]
+# Back on the original: nothings/stb resumed fixes and shipped v1.23 (a burst of overflow, OOB,
+# UB and decode fixes to stb_vorbis.c since 2026-10-26) plus the 64-bit rework.  The sezero fork
+# we carried through 0.2.1 went dormant (last stb_vorbis.c commit 2026-07-13) and now LAGS that
+# batch.  The original carries every fix the fork had except CVE-2023-45682, which we keep as a
+# one-line local change (listed in `modified`): the DECODE sparse guard of upstream PR
+# nothings/stb#1560, submitted upstream, to be dropped once a tagged release carries it.
 
 [thirdparty.stb_vorbis.reviewed]
-CVE-2018-1000050 = "fixed: in v1.13; our copy is v1.22"
-CVE-2019-13217 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13218 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13219 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13220 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13221 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13222 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2019-13223 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.22"
-CVE-2023-45675 = "fixed: in the fork we vendor (65cae52dd, before our pin)"
-CVE-2023-45676 = "fixed: in the fork we vendor (65cae52dd, cff600c55, before our pin)"
-CVE-2023-45677 = "fixed: in the fork we vendor (65cae52dd, cff600c55, before our pin)"
-CVE-2023-45678 = "fixed: in the fork we vendor (ef93068e7, before our pin)"
-CVE-2023-45679 = "fixed: in the fork we vendor (3527d6e7f, before our pin)"
-CVE-2023-45680 = "fixed: in the fork we vendor (3527d6e7f, before our pin)"
-CVE-2023-45681 = "fixed: in the fork we vendor (fd4a18c1a, before our pin)"
-CVE-2023-45682 = "fixed: in the fork we vendor (373de9da6, before our pin)"
-CVE-2026-5316 = "fixed: measured — the fork we vendor rejects its PoC cleanly under ASan, where v1.22 crashed"
-CVE-2026-5317 = "fixed: measured — the fork we vendor rejects its PoC cleanly under ASan, where v1.22 crashed"
-CVE-2026-89266 = "fixed: in the fork we vendor (13d26ccac, before our pin)"
+CVE-2018-1000050 = "fixed: in v1.13; our copy is v1.23"
+CVE-2019-13217 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13218 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13219 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13220 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13221 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13222 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2019-13223 = "fixed: in v1.17 (its changelog names CVE-2019-13217..13223); our copy is v1.23"
+CVE-2023-45675 = "fixed: in v1.23 (setup_malloc/setup_temp_malloc overflow guards, f5d198c); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45676 = "fixed: in v1.23 (setup_malloc overflow guards + comment_list memset/NULL guard, f5d198c); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45677 = "fixed: in v1.23 (setup_malloc overflow guards, f5d198c); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45678 = "fixed: in v1.23 (Mapping submap_floor/submap_residue sized 16); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45679 = "fixed: in v1.23 (comment_list memset so vorbis_deinit frees only initialised entries); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45680 = "fixed: in v1.23 (comment_list NULL guard in vorbis_deinit); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45681 = "fixed: in v1.23 (comment_list_length overflow guard, f5d198c); the published GHSL PoC is refused cleanly under ASan+UBSan — measured on our shipped file"
+CVE-2023-45682 = "fixed: by the one-line DECODE sparse guard we carry (modified; upstream PR nothings/stb#1560 / GHSL-2023-172).  A crafted minimal stream reaching the unguarded sorted_values[-1] read crashes pristine v1.23 and is clean on our file under ASan+UBSan — measured"
+CVE-2026-5316 = "fixed: measured — our shipped file rejects its PoC cleanly under ASan, where v1.22 crashed"
+CVE-2026-5317 = "fixed: measured — our shipped file rejects its PoC cleanly under ASan, where v1.22 crashed"
+CVE-2026-89266 = "fixed: in v1.23 (codebook/multiplicands size path hardened: CODEBOOK_LIMIT a5ccde4, lookup1_values on doubles b9c73af); its PoC is refused cleanly under ASan — measured on our shipped file"
 
 [thirdparty.audio-backends]
 kind     = "system"
