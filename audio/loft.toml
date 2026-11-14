@@ -1,6 +1,6 @@
 [package]
 name    = "audio"
-version = "0.2.2"
+version = "0.2.3"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "Clips, voices and one mix: the same sound on a PC and on a 32-bit device"
