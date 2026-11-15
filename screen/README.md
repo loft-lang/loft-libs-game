@@ -55,6 +55,7 @@ it does not: one program, asking what the machine has, never which machine it is
 | `poll(wait_ms = 0) -> boolean` | take the window's events, waiting up to `wait_ms`; false once closed |
 | `has_keys() -> boolean`, `keys() -> vector<boolean>` | the window's keys by graphics' key codes (`KEY_W` = 119, `KEY_UP` = 128, ...), the form `input_tick_from_state` takes |
 | `shown(x, y) -> integer`, `width()`, `height()` | what the screen shows at a pixel (-1 outside), and its size |
+| `program_keys()` | whether `keys()` reads the program's keys whichever of its windows is in front (macOS), or only this window's (X11) |
 | `close()` | |
 
 ## How it is built
