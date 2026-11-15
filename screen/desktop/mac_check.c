@@ -124,8 +124,12 @@ int main(void) {
         return 2;
     }
     win_number = (long) sm_l(sm.window, "windowNumber");
+    /* The real pointer stays out of it: a move over the window while this runs would put its
+     * own place between the posted events.  The posted moves go into the queue themselves. */
+    sm_v_l(sm.window, "setAcceptsMouseMovedEvents:", 0);
     expect(sc_width() == 32 && sc_height() == 24, "the screen is 32 x 24");
     expect(sc_has_keys() && sc_pointer(4), "it has keys and a pointer");
+    expect(sc_program_keys() == 1, "its keys are the program's");
 
     /* The frame, as the window's layer holds it. */
     memcpy(shown, frame, sizeof frame);
@@ -210,7 +214,7 @@ int main(void) {
     sm_v(sm.window, "close");
     expect(sc_poll(0) == 0, "its window closed, poll answers false");
     sc_close();
-    expect(sc_shown(0, 0) == -1 && !sc_has_keys(), "closed: nothing shown, no keys");
+    expect(sc_shown(0, 0) == -1 && !sc_has_keys() && !sc_program_keys(), "closed: nothing shown, no keys");
     printf("%s\n", failed ? "FAILED" : "as expected");
     return failed;
 }

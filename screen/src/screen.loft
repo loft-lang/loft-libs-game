@@ -38,6 +38,8 @@ fn sc_text() -> text;
 #c "sc_text" "const char*(void)"
 fn sc_text_taken();
 #c "sc_text_taken" "void(void)"
+fn sc_program_keys() -> integer;
+#c "sc_program_keys" "int64_t(void)"
 
 /// Open the screen for frames of `width` by `height` pixels, each shown as a `scale` by
 /// `scale` block.  On a desktop that is a window of that size titled `title`; on a device it is
@@ -68,6 +70,15 @@ pub fn poll(wait_ms: integer = 0) -> boolean {
 /// Does this screen have keys of its own (a desktop window)?  A device's keys are `input`'s.
 pub fn has_keys() -> boolean {
   sc_has_keys() != 0
+}
+
+/// True where the keys this screen reads are the program's, whichever of its windows is in
+/// front (macOS: one event queue for the application).  False where every window has its own
+/// (X11): a second window in front then takes the keys, and this screen reads none.  A game
+/// that opens a second window — a GPU view beside its frame — asks this before it relies on
+/// `keys()` while that window is in front.
+pub fn program_keys() -> boolean {
+  sc_program_keys() != 0
 }
 
 /// Which of the window's keys are down, by graphics' key codes (`KEY_W` = 119, `KEY_UP` =
