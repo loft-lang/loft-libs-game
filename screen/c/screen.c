@@ -10,7 +10,9 @@
  *   Tanmatsu (ESP_PLATFORM): the BSP's display, the frame rotated into the portrait panel.
  *   A browser page (`--native-c --html`, where loft defines LOFT_BROWSER): the page's canvas
  *        through loft's `loft_gl` imports, the frame scaled up by the GPU.
- *   Elsewhere (a WASI module, Windows, macOS): none yet — sc_open answers 0.
+ *   macOS: a window through AppKit, by the Objective-C runtime; libobjc and AppKit are opened
+ *        at run time, so building needs no SDK.
+ *   Elsewhere (a WASI module, Windows): none yet — sc_open answers 0.
  *
  * Mode 1 of sc_open is OFF-SCREEN on every platform: the back buffer only, which is how the
  * scaling is tested where there is no display.
@@ -18,6 +20,9 @@
  * Key codes are graphics' (`KEY_W` = 119, `KEY_UP` = 128, ...), as input's are. */
 #if !defined(_POSIX_C_SOURCE) && !defined(_WIN32) && !defined(ESP_PLATFORM)
 #define _POSIX_C_SOURCE 200809L
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1 /* RTLD_DEFAULT, pthread_main_np, usleep beside _POSIX_C_SOURCE */
 #endif
 #include <stdint.h>
 #include <stdlib.h>
@@ -441,6 +446,9 @@ static void sc_platform_close(void) {
 #define SC_X11 1
 #endif
 #endif
+#if defined(__APPLE__) && !defined(__wasm__) && !defined(ESP_PLATFORM)
+#define SC_COCOA 1
+#endif
 
 #if defined(SC_X11)
 
@@ -834,9 +842,372 @@ static void sc_platform_close(void) {
     sc_tex_w = sc_tex_h = 0;
 }
 
+#elif defined(SC_COCOA)
+
+/* ── macOS: a window through AppKit, by the Objective-C runtime.  libobjc and AppKit are opened
+ * at run time and every message goes through `objc_msgSend` cast to the method's own type, so
+ * this builds with loft's fixed flags and no SDK, as graphics' window does.  The back buffer is
+ * widened exactly as the X11 window widens it and handed to the content view's layer as one
+ * image, magnified by nearest neighbour where the display has more pixels than points.  AppKit
+ * makes and drives a window on the main thread: every job below runs there. ── */
+#include <dlfcn.h>
+#include <math.h>
+#include <pthread.h>
+#include <unistd.h>
+
+typedef void *sm_id;
+typedef void *sm_sel;
+typedef struct {
+    double x, y;
+} sm_point;
+typedef struct {
+    double x, y, width, height;
+} sm_rect;
+
+static struct {
+    int loaded; /* 1 bound, -1 could not be */
+    sm_id (*get_class)(const char *);
+    sm_sel (*selector)(const char *);
+    void (*msg)(void); /* objc_msgSend, cast at each call */
+    void *(*pool_push)(void);
+    void (*pool_pop)(void *);
+    void (*dispatch_sync_f)(void *, void *, void (*)(void *));
+    void *main_queue;
+    void *(*run_loop_main)(void);
+    unsigned char (*run_loop_waiting)(void *);
+    int main_served;
+    void *(*space_rgb)(void);
+    void *(*data_create)(void *, const uint8_t *, long);
+    void *(*provider_create)(void *);
+    void *(*image_create)(size_t, size_t, size_t, size_t, size_t, void *, uint32_t, void *,
+                          const double *, unsigned char, int32_t);
+    void (*cf_release)(void *);
+    void *space;
+    sm_id app, mode, window, layer;
+    int was_key;
+} sm;
+
+static sm_sel sm_s(const char *n) { return sm.selector(n); }
+static sm_id sm_class(const char *n) { return sm.get_class(n); }
+static sm_id sm_o(sm_id o, const char *s) { return ((sm_id (*)(sm_id, sm_sel)) sm.msg)(o, sm_s(s)); }
+static sm_id sm_o_p(sm_id o, const char *s, const void *a) {
+    return ((sm_id (*)(sm_id, sm_sel, const void *)) sm.msg)(o, sm_s(s), a);
+}
+static void sm_v(sm_id o, const char *s) { ((void (*)(sm_id, sm_sel)) sm.msg)(o, sm_s(s)); }
+static void sm_v_o(sm_id o, const char *s, sm_id a) {
+    ((void (*)(sm_id, sm_sel, sm_id)) sm.msg)(o, sm_s(s), a);
+}
+static void sm_v_l(sm_id o, const char *s, long a) { /* an integer, enum or BOOL argument */
+    ((void (*)(sm_id, sm_sel, long)) sm.msg)(o, sm_s(s), a);
+}
+static unsigned long sm_l(sm_id o, const char *s) {
+    return ((unsigned long (*)(sm_id, sm_sel)) sm.msg)(o, sm_s(s));
+}
+static int sm_b(sm_id o, const char *s) { /* a BOOL: only its low byte is defined */
+    return ((signed char (*)(sm_id, sm_sel)) sm.msg)(o, sm_s(s)) != 0;
+}
+static sm_id sm_str(const char *t) { return sm_o_p(sm_class("NSString"), "stringWithUTF8String:", t); }
+
+#define SM_SYM(field, name) (*(void **) (&sm.field) = dlsym(RTLD_DEFAULT, name), sm.field != NULL)
+
+static int sm_load(void) {
+    void **mode;
+    if (sm.loaded) return sm.loaded > 0;
+    sm.loaded = -1;
+    if (!dlopen("/usr/lib/libobjc.A.dylib", RTLD_NOW | RTLD_GLOBAL) ||
+        !dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_NOW | RTLD_GLOBAL))
+        return 0;
+    if (!(SM_SYM(get_class, "objc_getClass") && SM_SYM(selector, "sel_registerName") &&
+          SM_SYM(msg, "objc_msgSend") && SM_SYM(pool_push, "objc_autoreleasePoolPush") &&
+          SM_SYM(pool_pop, "objc_autoreleasePoolPop") && SM_SYM(dispatch_sync_f, "dispatch_sync_f") &&
+          SM_SYM(main_queue, "_dispatch_main_q") && SM_SYM(run_loop_main, "CFRunLoopGetMain") &&
+          SM_SYM(run_loop_waiting, "CFRunLoopIsWaiting") &&
+          SM_SYM(space_rgb, "CGColorSpaceCreateDeviceRGB") && SM_SYM(data_create, "CFDataCreate") &&
+          SM_SYM(provider_create, "CGDataProviderCreateWithCFData") &&
+          SM_SYM(image_create, "CGImageCreate") && SM_SYM(cf_release, "CFRelease")))
+        return 0;
+    mode = (void **) dlsym(RTLD_DEFAULT, "NSDefaultRunLoopMode");
+    if (!mode || !*mode) return 0;
+    sm.mode = *mode;
+    sm.loaded = 1;
+    return 1;
+}
+
+/* Run `job` on the main thread and wait for it: here when this is the main thread (the
+ * interpreter, the C backend), else through the main queue, which loft's native `main` drains.
+ * 0 when the main thread is not in its run loop, so nothing would run the job. */
+static int sm_on_main(void (*job)(void *), void *arg) {
+    int i;
+    if (pthread_main_np()) {
+        job(arg);
+        return 1;
+    }
+    for (i = 0; !sm.main_served && i < 200; i++) {
+        if (sm.run_loop_waiting(sm.run_loop_main())) sm.main_served = 1;
+        else usleep(10000);
+    }
+    if (!sm.main_served) return 0;
+    sm.dispatch_sync_f(sm.main_queue, arg, job);
+    return 1;
+}
+
+/* A virtual key code as graphics' key code, the keys the X11 window knows; 0 for any other. */
+static int sm_code(unsigned kc, sm_id ev) {
+    static const unsigned char fkeys[12] = {0x7A, 0x78, 0x63, 0x76, 0x60, 0x61,
+                                            0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F};
+    const char *chars;
+    int i;
+    for (i = 0; i < 12; i++)
+        if (kc == fkeys[i]) return 135 + i;
+    switch (kc) {
+    case 0x31: return 32;             /* Space */
+    case 0x24: case 0x4C: return 13;  /* Return, keypad Enter */
+    case 0x35: return 27;             /* Escape */
+    case 0x33: return 8;              /* Delete, which is Backspace */
+    case 0x30: return 9;              /* Tab */
+    case 0x7E: return 128;
+    case 0x7D: return 129;
+    case 0x7B: return 130;
+    case 0x7C: return 131;
+    case 0x38: case 0x3C: return 132; /* Shift */
+    case 0x3B: case 0x3E: return 133; /* Control */
+    case 0x75: return 147;            /* forward delete */
+    case 0x72: return 148;            /* Help, where Insert is */
+    case 0x73: return 149;
+    case 0x77: return 150;
+    case 0x74: return 151;
+    case 0x79: return 152;
+    default: break;
+    }
+    if (!ev) return 0;
+    chars = (const char *) sm_o(sm_o(ev, "charactersIgnoringModifiers"), "UTF8String");
+    if (!chars || chars[1] != 0) return 0;
+    if (chars[0] >= 'a' && chars[0] <= 'z') return chars[0];
+    if (chars[0] >= 'A' && chars[0] <= 'Z') return chars[0] + 32;
+    if ((chars[0] >= '0' && chars[0] <= '9') || chars[0] == '[' || chars[0] == ']') return chars[0];
+    return 0;
+}
+
+static void sm_event(sm_id ev, unsigned long type) {
+    sm_point p;
+    int x, y, bit = 0, inside;
+    if (type == 10 || type == 11) { /* key down, key up */
+        unsigned kc = (unsigned) sm_l(ev, "keyCode");
+        int code = sm_code(kc, ev);
+        if (code > 0) sc_keys[code] = type == 10;
+        if (type == 10) {
+            /* What the key types: AppKit's, except Delete (a backspace, as X11 types it), forward
+             * delete, and the keys that type nothing (U+F700-U+F8FF here). */
+            const char *t = (const char *) sm_o(sm_o(ev, "characters"), "UTF8String");
+            int n = t ? (int) strlen(t) : 0;
+            if (kc == 0x33) t = "\b", n = 1;
+            else if (kc == 0x75) t = "\x7f", n = 1;
+            else if (n == 3 && (unsigned char) t[0] == 0xEF && (unsigned char) t[1] >= 0x9C &&
+                     (unsigned char) t[1] <= 0xA3)
+                n = 0;
+            sc_type(t, n);
+        }
+        return;
+    }
+    if (type == 12) { /* the modifier state changed: Shift and Control are keys here */
+        unsigned kc = (unsigned) sm_l(ev, "keyCode");
+        unsigned long flags = sm_l(ev, "modifierFlags");
+        if (kc == 0x38 || kc == 0x3C) sc_keys[132] = (flags & (1ul << 17)) != 0;
+        if (kc == 0x3B || kc == 0x3E) sc_keys[133] = (flags & (1ul << 18)) != 0;
+        return;
+    }
+    /* The pointer, in pixels from the content's top left (AppKit's y runs up). */
+    p = ((sm_point (*)(sm_id, sm_sel)) sm.msg)(ev, sm_s("locationInWindow"));
+    x = (int) floor(p.x);
+    y = (int) floor((double) sc_bh - p.y);
+    inside = x >= 0 && y >= 0 && x < sc_bw && y < sc_bh;
+    switch (type) {
+    case 1: case 2: bit = 1; break;                                  /* left down, up */
+    case 3: case 4: bit = 2; break;                                  /* right down, up */
+    case 25: case 26: bit = sm_l(ev, "buttonNumber") == 2 ? 4 : 0; break; /* other down, up */
+    case 5: case 6: case 7: case 27:                                 /* moved, dragged */
+        if (!inside && !sc_buttons) return; /* over the title bar */
+        sc_px = x;
+        sc_py = y;
+        return;
+    case 22: { /* the wheel */
+        double dy = ((double (*)(sm_id, sm_sel)) sm.msg)(ev, sm_s("scrollingDeltaY"));
+        if (inside && dy != 0.0) sc_wheel += dy > 0.0 ? 1 : -1;
+        return;
+    }
+    default: return;
+    }
+    if (!bit) return;
+    if (type == 1 || type == 3 || type == 25) {
+        if (!inside) return; /* the title bar: the window's, not the program's */
+        sc_buttons |= bit;
+    } else {
+        sc_buttons &= ~bit;
+    }
+    sc_px = x;
+    sc_py = y;
+}
+
+static sm_id sm_next(sm_id until) {
+    return ((sm_id (*)(sm_id, sm_sel, unsigned long, sm_id, sm_id, signed char)) sm.msg)(
+        sm.app, sm_s("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~0ul, until, sm.mode, 1);
+}
+
+/* Take every queued event.  Keys are answered here and not passed on (AppKit beeps at a key no
+ * view takes); everything else goes on to AppKit, which moves and closes the window. */
+static void sm_drain(sm_id first) {
+    sm_id past = sm_o(sm_class("NSDate"), "distantPast"), ev = first;
+    for (;;) {
+        unsigned long type;
+        if (!ev) ev = sm_next(past);
+        if (!ev) break;
+        type = sm_l(ev, "type");
+        sm_event(ev, type);
+        if (type != 10 && type != 11) sm_v_o(sm.app, "sendEvent:", ev);
+        ev = NULL;
+    }
+    sm_v(sm.app, "updateWindows");
+}
+
+typedef struct {
+    const char *title;
+    int wait_ms, ok;
+} sm_job;
+
+static void sm_open_main(void *arg) {
+    sm_job *job = (sm_job *) arg;
+    void *pool = sm.pool_push();
+    sm_rect content;
+    sm_id view;
+    if (!sm.app) {
+        sm.app = sm_o(sm_class("NSApplication"), "sharedApplication");
+        if (sm.app) {
+            sm_v_l(sm.app, "setActivationPolicy:", 0); /* a regular app: a Dock icon, key windows */
+            sm_v(sm.app, "finishLaunching");
+        }
+    }
+    content.x = content.y = 0.0;
+    content.width = (double) sc_bw;
+    content.height = (double) sc_bh;
+    if (sm.app)
+        sm.window = ((sm_id (*)(sm_id, sm_sel, sm_rect, unsigned long, unsigned long, signed char)) sm.msg)(
+            sm_o(sm_class("NSWindow"), "alloc"), sm_s("initWithContentRect:styleMask:backing:defer:"),
+            content, 1ul | 2ul | 4ul /* titled, closable, miniaturizable */, 2ul /* buffered */, 0);
+    if (sm.window) {
+        sm_v_l(sm.window, "setReleasedWhenClosed:", 0);
+        sm_v_o(sm.window, "setTitle:", sm_str(job->title && *job->title ? job->title : "loft"));
+        sm_v_l(sm.window, "setAcceptsMouseMovedEvents:", 1);
+        sm_v(sm.window, "center");
+        view = sm_o(sm.window, "contentView");
+        sm_v_l(view, "setWantsLayer:", 1);
+        sm.layer = sm_o(view, "layer");
+        sm_v_o(sm.layer, "setMagnificationFilter:", sm_str("nearest"));
+        sm_v_o(sm.window, "makeKeyAndOrderFront:", NULL);
+        sm_v_l(sm.app, "activateIgnoringOtherApps:", 1);
+        if (!sm.space) sm.space = sm.space_rgb();
+        sm.was_key = 0;
+        job->ok = sm.layer != NULL && sm.space != NULL;
+    }
+    sm.pool_pop(pool);
+}
+
+static int sc_platform_open(const char *title) {
+    sm_job job;
+    job.title = title;
+    job.wait_ms = 0;
+    job.ok = 0;
+    if (!sm_load() || !sm_on_main(sm_open_main, &job)) return 0;
+    if (!job.ok) {
+        sc_platform_close();
+        return 0;
+    }
+    sc_have_keys = 1;
+    sc_have_pointer = 1;
+    return 1;
+}
+
+static void sm_present_main(void *arg) {
+    size_t i, n = (size_t) sc_bw * (size_t) sc_bh;
+    uint32_t *px = (uint32_t *) malloc(n * sizeof(uint32_t));
+    void *pool, *data, *provider, *image;
+    (void) arg;
+    if (!px || !sm.layer) {
+        free(px);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        uint16_t c = sc_back[i];
+        uint32_t r = ((c >> 11) & 31) * 255 / 31, g = ((c >> 5) & 63) * 255 / 63, b = (c & 31) * 255 / 31;
+        px[i] = (r << 16) | (g << 8) | b;
+    }
+    pool = sm.pool_push();
+    data = sm.data_create(NULL, (const uint8_t *) px, (long) (n * sizeof(uint32_t)));
+    free(px);
+    provider = data ? sm.provider_create(data) : NULL;
+    /* 8 bits a component, 32 a pixel, the first byte skipped, little-endian: 0x00RRGGBB words. */
+    image = provider ? sm.image_create((size_t) sc_bw, (size_t) sc_bh, 8, 32, (size_t) sc_bw * 4, sm.space,
+                                       6u | (2u << 12), provider, NULL, 0, 0)
+                     : NULL;
+    if (image) {
+        sm_v_o(sm.layer, "setContents:", (sm_id) image);
+        sm_v(sm_class("CATransaction"), "flush");
+        sm.cf_release(image);
+    }
+    if (provider) sm.cf_release(provider);
+    if (data) sm.cf_release(data);
+    sm.pool_pop(pool);
+}
+
+static void sc_platform_present(void) { sm_on_main(sm_present_main, NULL); }
+
+/* Handle every queued event, then wait up to `wait_ms` for more, as the X11 window does. */
+static void sm_wait_main(void *arg) {
+    sm_job *job = (sm_job *) arg;
+    void *pool;
+    int key;
+    if (!sm.window) return;
+    pool = sm.pool_push();
+    sm_drain(NULL);
+    if (job->wait_ms > 0 && sc_alive) {
+        sm_id until = ((sm_id (*)(sm_id, sm_sel, double)) sm.msg)(
+            sm_class("NSDate"), sm_s("dateWithTimeIntervalSinceNow:"), (double) job->wait_ms / 1000.0);
+        sm_id ev = sm_next(until);
+        if (ev) sm_drain(ev);
+    }
+    key = sm_b(sm.window, "isKeyWindow");
+    if (sm.was_key && !key) memset(sc_keys, 0, sizeof sc_keys); /* keys let go while away never release */
+    sm.was_key = key;
+    if (!sm_b(sm.window, "isVisible") && !sm_b(sm.window, "isMiniaturized")) sc_alive = 0; /* closed */
+    sm.pool_pop(pool);
+}
+
+static void sc_platform_wait(int wait_ms) {
+    sm_job job;
+    job.title = NULL;
+    job.wait_ms = wait_ms;
+    job.ok = 0;
+    sm_on_main(sm_wait_main, &job);
+}
+
+static void sm_close_main(void *arg) {
+    void *pool = sm.pool_push();
+    (void) arg;
+    if (sm.window) {
+        sm_v(sm.window, "close");
+        sm_v(sm.window, "release");
+        sm_drain(NULL); /* the window leaves the screen now, not at the next poll */
+    }
+    sm.window = sm.layer = NULL;
+    sm.pool_pop(pool);
+}
+
+static void sc_platform_close(void) {
+    if (sm.loaded > 0) sm_on_main(sm_close_main, NULL);
+}
+
 #elif !defined(ESP_PLATFORM)
 
-/* ── No screen here yet (a WASI module, Windows, macOS): sc_open answers 0. ── */
+/* ── No screen here yet (a WASI module, Windows): sc_open answers 0. ── */
 static int sc_platform_open(const char *title) {
     (void) title;
     return 0;
