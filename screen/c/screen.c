@@ -40,6 +40,7 @@ int64_t sc_height(void);
 int64_t sc_pointer(int64_t which);
 const char *sc_text(void);
 void sc_text_taken(void);
+int64_t sc_program_keys(void);
 
 /* ── Shared: the back buffer, one RGB565 value per screen pixel ── */
 
@@ -267,6 +268,16 @@ const char *sc_text(void) { sc_typed[sc_typed_n] = 0; return sc_typed; }
 void sc_text_taken(void) { sc_typed_n = 0; sc_typed[0] = 0; }
 
 int64_t sc_height(void) { return sc_bh; }
+
+/* Whether this screen's keys are the PROGRAM's, whichever of its windows is in front: macOS has
+ * one event queue for the application and this screen drains it; an X11 window has its own. */
+int64_t sc_program_keys(void) {
+#if defined(__APPLE__) && !defined(__wasm__) && !defined(ESP_PLATFORM)
+    return sc_open_mode == 0 && sc_have_keys;
+#else
+    return 0;
+#endif
+}
 
 #if defined(ESP_PLATFORM)
 
