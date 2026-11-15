@@ -27,11 +27,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(__wasm__)
-/* OGG Vorbis by the vendored stb_vorbis (public domain / MIT).  It needs libm, which loft's
- * freestanding wasm build has not, so there a Vorbis clip does not load (`ae_load` answers 0). */
+#if !defined(__wasm__) || defined(__wasi__)
+/* OGG Vorbis by the vendored stb_vorbis (public domain / MIT).  It needs libm: every native
+ * build and a WASI module (a `--native-c` page or `--native-wasm`, built on the WASI libc) have
+ * it; loft's freestanding wasm build (the Rust writer's page) has not, so there a Vorbis clip
+ * does not load (`ae_load` answers 0). */
 #define STB_VORBIS_NO_STDIO
 #define STB_VORBIS_NO_PUSHDATA_API
+#if defined(__wasi__)
+#include <alloca.h> /* stb_vorbis's alloca; the WASI libc declares it here */
+#endif
 #include "vendor/stb_vorbis/stb_vorbis.c"
 #define AE_HAVE_VORBIS 1
 #else

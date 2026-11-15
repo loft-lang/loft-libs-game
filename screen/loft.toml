@@ -1,6 +1,6 @@
 [package]
 name    = "screen"
-version = "0.1.1"
+version = "0.2.0"
 loft    = ">=2026.10.0"
 repository = "loft-libs-game"
 description = "A small frame on the machine's screen, scaled up, with the keys of its window — one API on a desktop and a device"
@@ -14,7 +14,8 @@ data_compatible_with = "0.1.0"   # oldest own release whose stored data this rea
 entry = "src/screen.loft"
 
 # The screen is C99 loft builds with `cc` (`clang` for wasm): an X11 window (libX11 opened at
-# run time) on a desktop, the BSP display on a Tanmatsu, none elsewhere yet.
+# run time) on Linux and the BSDs, an AppKit window (by the Objective-C runtime, opened at run
+# time) on macOS, the page's canvas in a browser, the BSP display on a Tanmatsu, none elsewhere yet.
 [c]
 shim = "c/screen.c"
 
@@ -23,3 +24,8 @@ shim = "c/screen.c"
 kind     = "system"
 names    = ["X11"]
 provider = "the OS display server's client library (Xorg / XWayland), opened at run time"
+
+[thirdparty.appkit]
+kind     = "system"
+names    = ["AppKit", "objc", "CoreGraphics"]
+provider = "macOS's windowing libraries and the Objective-C runtime, opened at run time"

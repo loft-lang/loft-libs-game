@@ -16,7 +16,9 @@ scaled up by a whole number on whatever this machine has, with one API:
 |---|---|---|
 | a desktop with X11 (Linux, the BSDs) | a window, `width * scale` by `height * scale` | the window's (`keys()`) |
 | a Tanmatsu | the display: the frame rotated into the portrait panel, centred | none here: `input::input_tick_device()` reads the keyboard |
-| a browser, Windows, macOS | not yet: `open` answers false | |
+| macOS | a window, `width * scale` by `height * scale` points, the frame magnified by nearest neighbour where the display has more pixels | the window's (`keys()`) |
+| a browser page (`--native-c --html`) | the page's canvas, the frame scaled by the GPU | the page's (`keys()`) |
+| Windows, a WASI module | not yet: `open` answers false | |
 
 ```loft
 use screen;
@@ -59,6 +61,9 @@ it does not: one program, asking what the machine has, never which machine it is
 
 One C file, `c/screen.c`: the scaling into a back buffer is shared, and one section per
 platform puts that buffer on the screen.  X11's library is opened at run time, so building
-needs only its headers and a machine with no display just answers `open` false.  The
+needs only its headers and a machine with no display just answers `open` false.  The macOS
+section reaches AppKit through the Objective-C runtime, opened at run time too, so it needs no
+SDK; `desktop/mac_check.sh` shows a frame, reads the window's image back and posts keys and
+clicks into its own queue (it needs a window server).  The
 Tanmatsu section is type-checked against the board's BSP headers; it has not run on the
 device yet.  Adding a platform is a new section: [loft's HARDWARE_BACKENDS.md](https://github.com/loft-lang/loft/blob/main/doc/claude/HARDWARE_BACKENDS.md).

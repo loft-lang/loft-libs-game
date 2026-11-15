@@ -15,7 +15,14 @@
  * Desktop (Linux, macOS, Windows): miniaudio, 16-bit stereo at the engine's rate.
  * Tanmatsu (ESP-IDF, `ESP_PLATFORM`): a FreeRTOS task writes the mix to the board's I2S
  * channel, which the BSP has configured for 16-bit stereo (`bsp/audio.h`).
- * wasm: none — `ae_out_open` answers 0, and `ae_render` stays the way out. */
+ * A browser page (`--native-c --html`, `LOFT_BROWSER`): the page's Web Audio pulls the mix.
+ * `ae_out_open` asks the page for an output at the engine's rate (loft's `loft_gl` import
+ * `gg_audio_open`); for each block it plays, the page calls this module's export
+ * `loft_audio_pull` between the program's frames and copies the 16-bit stereo frames it
+ * answers.  A page may start sound only after the player's first key or click, so the output
+ * runs from then on.
+ * Other wasm (a WASI module): none — `ae_out_open` answers 0, and `ae_render` stays the way
+ * out. */
 
 /* Mix `frames` stereo frames as 16-bit samples, under the engine lock. */
 static void ae_out_fill(int16_t *out, int64_t frames) {
@@ -83,6 +90,43 @@ void ae_out_close(void) {
     if (!ae_out_on) return;
     ae_out_on = 0; /* the task ends after its current buffer */
     bsp_audio_set_amplifier(false);
+}
+
+#elif defined(__wasm__) && defined(LOFT_BROWSER)
+
+__attribute__((import_module("loft_gl"), import_name("gg_audio_open"))) int ae_js_audio_open(int rate);
+__attribute__((import_module("loft_gl"), import_name("gg_audio_close"))) void ae_js_audio_close(void);
+
+#define AE_PULL_MAX 4096
+static int16_t ae_pull_buf[AE_PULL_MAX * 2];
+
+/* The next `frames` stereo frames of the mix (at most AE_PULL_MAX), for the page's audio: where
+ * they are.  Silence while the output is closed. */
+__attribute__((export_name("loft_audio_pull"))) int16_t *loft_audio_pull(int frames) {
+    if (frames < 0) frames = 0;
+    if (frames > AE_PULL_MAX) frames = AE_PULL_MAX;
+    if (!ae_out_on) {
+        memset(ae_pull_buf, 0, (size_t) frames * 2 * sizeof(int16_t));
+        return ae_pull_buf;
+    }
+    ae_out_fill(ae_pull_buf, frames);
+    ae_out_taken += frames;
+    return ae_pull_buf;
+}
+
+int64_t ae_out_open(int64_t mode) {
+    if (ae_out_on) return 1;
+    /* A page has no silent test device; mode 1 is the desktop's. */
+    if (mode != 0 || !ae_js_audio_open((int) ae_out_rate)) return 0;
+    ae_out_taken = 0;
+    ae_out_on = 1;
+    return 1;
+}
+
+void ae_out_close(void) {
+    if (!ae_out_on) return;
+    ae_out_on = 0;
+    ae_js_audio_close();
 }
 
 #elif defined(__wasm__)
