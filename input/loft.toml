@@ -1,6 +1,6 @@
 [package]
 name    = "input"
-version = "0.3.0"
+version = "0.3.1"
 loft    = ">=2026.10.0"
 api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
@@ -16,4 +16,4 @@ entry = "src/input.loft"
 shim = "c/keys.c"
 
 [dependencies]
-graphics = ">=0.10.0"
+graphics = ">=0.13.3"
