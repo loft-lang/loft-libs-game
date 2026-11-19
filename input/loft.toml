@@ -2,8 +2,9 @@
 name    = "input"
 version = "0.3.1"
 loft    = ">=2026.10.0"
-api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
-data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+api_compatible_with  = "0.3.1"   # DECLARED BREAK: graphics' `Canvas` and `Glyph` reshape through
+data_compatible_with = "0.3.1"   # the dependency (its 0.12 break: `u32` pixels), which 0.3.0's
+                                 # floor held off; this package's own surface is a superset.
 repository = "loft-libs-game"
 description = "Game input for loft — action/axis bindings resolved to per-tick input state."
 
