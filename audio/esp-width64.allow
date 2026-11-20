@@ -1,0 +1,8 @@
+# audio's 64-bit work in a 32-bit device app (loft --native-esp; loft's WIDTH32.md § The image gate).
+# The mixer's inner loop is not here: a voice's place is whole numbers, stepped with no double.
+ae_pan_gains            a voice's two pan gains come from sin and cos in double, the same bits on every target; once when it starts or is panned
+u_ae_play               a start offset in seconds is a double, placed once as the voice starts
+ae_load                 a clip's frame count is 64 bits in the vendored decoders' own types; once at load
+float32_unpack          vendored stb_vorbis: reads the codebook floats of an Ogg Vorbis file; at load
+init_blocksize          vendored stb_vorbis: builds the transform's tables in double; at load
+stb_vorbis_open_memory  vendored stb_vorbis: opens an Ogg Vorbis file; at load

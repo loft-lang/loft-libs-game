@@ -9,9 +9,9 @@
  * checkable on a machine with no sound device: `ae_render` is the output.
  *
  * The mix, per output frame:
- *   - each playing voice reads its clip at `pos`, linearly interpolated between the two source
+ *   - each playing voice reads its clip at its place, linearly interpolated between the two source
  *     frames around it (the neighbour past the last frame is the first when the voice loops,
- *     silence when it does not), and advances `pos` by `clip rate / output rate`;
+ *     silence when it does not), and steps on by `clip rate / output rate`;
  *   - the voice's volume scales it, and its pan places it by Web Audio's StereoPannerNode law
  *     (equal-power: a mono clip at the centre is cos(pi/4) on each side);
  *   - the voices are summed, clamped to [-1, 1], and written as 16-bit: round(s * 32767),
@@ -84,7 +84,12 @@ typedef struct {
 typedef struct {
     int64_t clip; /* clip handle; 0 when the slot is free */
     int64_t generation;
-    double pos;   /* in source frames */
+    /* Where the voice reads its clip: frame `at` and `part` / output rate of the way to the next.
+     * Whole numbers, so a step is an add and a compare: a `double` position costs a 32-bit core
+     * with a single-precision FPU half a dozen library calls a sample.  And it is exact: a step
+     * of clip rate / output rate is a ratio of two integers, which no binary fraction holds. */
+    int64_t at;
+    int32_t part;
     float volume;
     float pan;
     float g0, g1; /* the pan's two gains (see ae_pan_gains) */
@@ -131,6 +136,19 @@ static void ae_pan_gains(ae_voice *v, int32_t channels) {
     x = channels == 1 ? (p + 1.0) / 2.0 : (p <= 0.0 ? p + 1.0 : p);
     v->g0 = (float) ae_cos(x * AE_HALF_PI);
     v->g1 = (float) ae_sin(x * AE_HALF_PI);
+}
+
+/* Put a voice at `pos` source frames: its whole frame, and the rest rounded to the output
+ * rate's grain. */
+static void ae_place(ae_voice *v, double pos) {
+    int64_t at = (int64_t) pos;
+    int32_t part = (int32_t) ((pos - (double) at) * (double) ae_out_rate + 0.5);
+    if (part >= ae_out_rate) {
+        part -= ae_out_rate;
+        at++;
+    }
+    v->at = at;
+    v->part = part;
 }
 
 static ae_clip *ae_clip_of(int64_t h) {
@@ -286,7 +304,8 @@ static int64_t ae_load_ogg(const uint8_t *b, int64_t n) {
 static float ae_at(const ae_clip *c, int64_t i, int ch, int looping) {
     if (i >= c->frames) {
         if (!looping) return 0.0f;
-        i %= c->frames;
+        /* One frame past the end at most: a subtraction, where `%` is a 64-bit division. */
+        while (i >= c->frames) i -= c->frames;
     }
     return c->samples[i * c->channels + (ch < c->channels ? ch : 0)];
 }
@@ -296,7 +315,6 @@ static void ae_mix(float *acc, int64_t frames) {
     for (s = 0; s < AE_VOICES; s++) {
         ae_voice *v = &ae_voices[s];
         ae_clip *c;
-        double step;
         int64_t f;
         if (v->clip == 0) continue;
         c = ae_clip_of(v->clip);
@@ -304,19 +322,18 @@ static void ae_mix(float *acc, int64_t frames) {
             v->clip = 0;
             continue;
         }
-        step = (double) c->rate / (double) ae_out_rate;
         for (f = 0; f < frames; f++) {
             int64_t i;
             float frac, l, r;
-            if (v->pos >= (double) c->frames) {
+            if (v->at >= c->frames) {
                 if (!v->looping) {
                     ae_end(v);
                     break;
                 }
-                while (v->pos >= (double) c->frames) v->pos -= (double) c->frames;
+                while (v->at >= c->frames) v->at -= c->frames;
             }
-            i = (int64_t) v->pos;
-            frac = (float) (v->pos - (double) i);
+            i = v->at;
+            frac = (float) v->part / (float) ae_out_rate;
             l = ae_at(c, i, 0, v->looping);
             l = l + (ae_at(c, i + 1, 0, v->looping) - l) * frac;
             if (c->channels == 1) {
@@ -336,7 +353,12 @@ static void ae_mix(float *acc, int64_t frames) {
                     acc[2 * f + 1] += r + l * v->g1;
                 }
             }
-            v->pos += step;
+            /* A step of clip rate / output rate: the whole frames it holds, and the rest. */
+            v->part += c->rate;
+            if (v->part >= ae_out_rate) {
+                v->at += v->part / ae_out_rate;
+                v->part %= ae_out_rate;
+            }
         }
     }
 }
@@ -428,11 +450,14 @@ static int64_t u_ae_play(int64_t clip, const loft_float *p, int64_t n) {
         v->volume = (float) p[0];
         v->looping = p[1] != 0.0;
         v->pan = (float) p[2];
-        v->pos = p[3] > 0.0 ? p[3] * (double) c->rate : 0.0;
-        v->owns_clip = 0;
-        if (v->looping) {
-            while (v->pos >= (double) c->frames) v->pos -= (double) c->frames;
+        {
+            double pos = p[3] > 0.0 ? p[3] * (double) c->rate : 0.0;
+            if (v->looping) {
+                while (pos >= (double) c->frames) pos -= (double) c->frames;
+            }
+            ae_place(v, pos);
         }
+        v->owns_clip = 0;
         ae_pan_gains(v, c->channels);
         return (int64_t) s + 1 + AE_VOICES * v->generation;
     }
@@ -501,7 +526,7 @@ static int64_t u_ae_seek(int64_t voice, const loft_float *p, int64_t n) {
         if (!v->looping) return 0;
         while (pos >= (double) c->frames) pos -= (double) c->frames;
     }
-    v->pos = pos;
+    ae_place(v, pos);
     return 1;
 }
 
