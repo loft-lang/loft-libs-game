@@ -1,8 +1,9 @@
 # stb_vorbis, vendored
 
 - Source: https://github.com/nothings/stb, `stb_vorbis.c` at commit
-  `6d17754ecc01e3772fd70ef4de7541277c4bf095` (stb_vorbis v1.23 plus the 64-bit-handling fix),
-  with one one-line local change (see *Local change* below).
+  `6b5799bae8a1fe3792691ef4b72ae26434c3e799` (stb_vorbis v1.25: v1.23's fixes, the 64-bit
+  handling, and the granule-position limits and bad-file checks of 56438ac59, 903c869eb and
+  98bc64014), with one one-line local change (see *Local change* below).
 - Why the original again, not the `sezero/stb` fork we carried through 0.2.1: the original has
   woken up.  Since 2026-10-26 it has taken v1.23 — a burst of overflow, out-of-bounds, UB and
   decode fixes to `stb_vorbis.c` (codebook-size limit, `set_file_offset` overflow, type-2
