@@ -23,6 +23,7 @@
  * Handles: a clip is its index + 1; a voice is `slot + 1 + AE_VOICES * generation`, the
  * generation bumped each time the slot is reused, so a handle to a finished voice acts on
  * nothing rather than on whatever took its place.  0 is "no handle" (loft null). */
+#include <limits.h>
 #include <stdint.h>
 #include "loft_width.h"
 #include <stdlib.h>
@@ -242,18 +243,24 @@ static int64_t ae_load_wav(const uint8_t *b, int64_t n) {
 }
 
 #if AE_HAVE_VORBIS
+#define AE_OGG_MAX_FRAMES ((int64_t) 1 << 28)
+
 static int64_t ae_load_ogg(const uint8_t *b, int64_t n) {
     int err = 0;
     stb_vorbis *f;
     stb_vorbis_info info;
     int64_t frames, got;
     float *out;
-    if (n < 4 || memcmp(b, "OggS", 4) != 0) return 0;
+    if (n < 4 || n > INT_MAX || memcmp(b, "OggS", 4) != 0) return 0;
     f = stb_vorbis_open_memory(b, (int) n, &err, NULL);
     if (!f) return 0;
     info = stb_vorbis_get_info(f);
     frames = (int64_t) stb_vorbis_stream_length_in_samples(f);
-    if (frames <= 0 || info.channels < 1) {
+    /* The length is the file's own word, and it sizes the buffer the decoder fills: above
+     * AE_OGG_MAX_FRAMES (2^28, an hour and a half at 48 kHz) the two-channel float buffer no
+     * longer fits 32-bit arithmetic — a 32-bit `size_t` wrapped to a small allocation the
+     * decoder then wrote past.  Such a file is not a clip. */
+    if (frames <= 0 || frames > AE_OGG_MAX_FRAMES || info.channels < 1) {
         stb_vorbis_close(f);
         return 0;
     }
