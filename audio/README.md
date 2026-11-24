@@ -33,7 +33,7 @@ loft install audio
 | `stop(voice)`, `stop_all()`, `playing(voice)` | | a finished voice's handle acts on nothing, even once its slot plays again |
 | `set_volume(voice, v)`, `set_pan(voice, p)`, `seek(voice, seconds) -> boolean` | | `seek` fails past the end of a clip that does not loop; a looping clip wraps |
 | `render(frames) -> vector<i32>` | `2 * frames` samples | left and right interleaved, each in -32767..32767 |
-| `start(silent = false) -> boolean` | whether it runs | the output; false where the machine has none (no device, a browser build); `silent` plays at real-time pace into nothing |
+| `start(silent = false) -> boolean` | whether it runs | the output; false where the machine has none (no device, or a page in a browser without Web Audio); `silent` plays at real-time pace into nothing, and a page has no silent output |
 | `stop_output()`, `output_running() -> boolean`, `output_frames() -> integer` | | stopping keeps every voice's place; `output_frames` counts the frames played since `start` |
 | `clip_frames`, `clip_rate`, `clip_channels`, `unload`, `rate`, `has_vorbis` | | |
 
@@ -53,7 +53,8 @@ on every target.
 | interpreter, `--native` | ✓ render suite, and the output played through miniaudio's null device |
 | C backend (`--native-c`) | ✓ both suites match the interpreter on x86-64, 32-bit x86 and 32-bit RISC-V (under qemu) |
 | Tanmatsu (ESP-IDF) | the I2S output task, type-checked against the board's BSP headers; not yet run on the device |
-| `--native-wasm` / `--html` | the engine builds for wasm32 freestanding, with no output (`start()` is false); OGG Vorbis does not load there (`has_vorbis()` is false) |
+| `--html` | the page plays the mix through Web Audio, which pulls it between the program's frames; a browser starts sound only after a key or a click, and the page resumes it then. OGG Vorbis does not load there (`has_vorbis()` is false) |
+| `--native-wasm` | the engine builds for wasm32 with no output (`start()` is false); OGG Vorbis does not load there |
 
 ## Provenance
 
