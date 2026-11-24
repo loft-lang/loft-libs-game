@@ -19,7 +19,7 @@
   read / crash).  The fix is submitted upstream (PR #1560, still open); drop it once a tagged
   release carries it.
 - License: public domain or MIT, the reader's choice (the notice at the end of the file).
-- SHA-256: `99c8e932b3ca5670ba252f38fab0e6aad786440c0e06395cd85b4540487f1157`.
+- SHA-256: `711a7f0e1bac5eddba1d85c64b2dfa96851609e604ea6ec4f5c41ff3e724eaf0`.
 - Built through `../../audio_engine.c` with `STB_VORBIS_NO_STDIO` and
   `STB_VORBIS_NO_PUSHDATA_API`, on every target but the two wasm builds (it needs libm, which
   loft's freestanding wasm build has not).
