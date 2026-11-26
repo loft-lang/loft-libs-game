@@ -1,0 +1,97 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// An OGG states its own length: the granule position of its last page, in frames.  `load`
+// sizes the decoded clip by it, so a stated length above 2^28 frames (about an hour and a half
+// at 48 kHz, where the float buffer stops fitting 32-bit sizes) is no clip at any width, and a
+// file whose stated length is within that bound loads as before.
+//
+// Each cell rewrites `tone.ogg` (its last page states 5513 frames) to state another length,
+// with the page checksum recomputed, so the file is a well-formed OGG either way.
+//
+// @falsified-at: 6c445bd — by hand: `frames > AE_OGG_MAX_FRAMES` taken out of ae_load_ogg's
+//   refusal → "a file stating 2^28 + 1 frames is no clip" failed (a clip came back) on the
+//   interpreter and on --native; restored, all three cells pass.
+use audio;
+
+LIMIT = 268435456;   // 2^28 frames
+
+// The Ogg page checksum of `b[from..till]`, written little-endian at `b[from + 22..]` (where the
+// page keeps it, zero while it is summed): CRC-32, polynomial 0x04C11DB7, MSB first, no
+// reflection, start and end value 0.  Kept in two 16-bit halves so the arithmetic is the same at
+// both widths.
+fn put_page_crc(b: vector<u8>, from: integer, till: integer) {
+  hi = 0;
+  lo = 0;
+  for i in from..till {
+    hi = hi ^ ((b[i] ?? 0 as u8) as integer << 8);
+    for _ in 0..8 {
+      top = hi & 32768;
+      hi = ((hi << 1) & 65535) | (lo >> 15);
+      lo = (lo << 1) & 65535;
+      if top != 0 {
+        hi = hi ^ 1217;    // 0x04C1
+        lo = lo ^ 7607;    // 0x1DB7
+      }
+    }
+  }
+  b[from + 22] = (lo & 255) as u8;
+  b[from + 23] = ((lo >> 8) & 255) as u8;
+  b[from + 24] = (hi & 255) as u8;
+  b[from + 25] = ((hi >> 8) & 255) as u8;
+}
+
+// `bytes`, its last page stating `frames` (0 ≤ frames < 2^31), the checksum rewritten.
+fn stating(bytes: const vector<u8>, frames: integer) -> vector<u8> {
+  out: vector<u8> = [];
+  for c in bytes { out += [c]; }
+  at = len(out) - 4;
+  while at > 0 && !((out[at] ?? 0 as u8) as integer == 79 && (out[at + 1] ?? 0 as u8) as integer == 103 &&
+                    (out[at + 2] ?? 0 as u8) as integer == 103 && (out[at + 3] ?? 0 as u8) as integer == 83) {
+    at -= 1;
+  }
+  v = frames;
+  for k in 0..8 {
+    out[at + 6 + k] = (v & 255) as u8;
+    v = v >> 8;
+  }
+  for k in 0..4 { out[at + 22 + k] = 0 as u8; }
+  segments = (out[at + 26] ?? 0 as u8) as integer;
+  till = at + 27 + segments;
+  for s in 0..segments { till += (out[at + 27 + s] ?? 0 as u8) as integer; }
+  put_page_crc(out, at, till);
+  out
+}
+
+fn tone() -> vector<u8> {
+  read_bytes("tone.ogg") ?? []
+}
+
+// The rewrite itself: stating the length the file already states gives back the same bytes,
+// checksum included, so the other cells change only the length.
+fn test_the_rewrite_keeps_a_stated_length() {
+  b = tone();
+  assert(len(b) == 3900, "tone.ogg read: {len(b)} bytes");
+  same = stating(b, 5513);
+  diff = 0;
+  for i in 0..len(b) {
+    if (b[i] ?? 0 as u8) as integer != (same[i] ?? 0 as u8) as integer { diff += 1; }
+  }
+  assert(diff == 0, "the same length rewrites to the same file: {diff} bytes differ");
+}
+
+fn test_a_stated_length_within_the_bound_loads() {
+  if !audio::has_vorbis() { return; }
+  audio::init(22050);
+  c = audio::load_bytes(stating(tone(), 6000)) ?? 0;
+  assert(c > 0, "a file stating 6000 frames loads");
+  assert(audio::clip_channels(c) == 1 && audio::clip_rate(c) == 22050, "22050 Hz mono");
+  audio::unload(c);
+}
+
+fn test_a_stated_length_past_the_bound_is_no_clip() {
+  if !audio::has_vorbis() { return; }
+  audio::init(22050);
+  c = audio::load_bytes(stating(tone(), LIMIT + 1));
+  assert(!c, "a file stating 2^28 + 1 frames is no clip, got {c ?? 0}");
+}
